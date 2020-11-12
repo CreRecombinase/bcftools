@@ -341,6 +341,13 @@ Add or remove annotations.
     +
     See also the *-l, --merge-logic* option.
 
+*-C, --columns-file* 'file'::
+    Read the list of columns from a file (normally given via the *-c, --columns* option).
+    "-" to skip a column of the annotation file.
+    One column name per row, an additional space- or tab-separated field can
+    be present to indicate the merge logic (normally given via the *-l, --merge-logic* option).
+    This is useful when many annotations are added at once.
+
 *-e, --exclude* 'EXPRESSION'::
     exclude sites for which 'EXPRESSION' is true. For valid expressions see
     *<<expressions,EXPRESSIONS>>*.
@@ -373,15 +380,16 @@ Add or remove annotations.
 *-k, --keep-sites*::
     keep sites which do not pass *-i* and *-e* expressions instead of discarding them
 
-*-l, --merge-logic* 'tag':'first'|'append'|'unique'|'sum'|'avg'|'min'|'max'[,...]::
+*-l, --merge-logic* 'tag':'first'|'append'|'append-missing'|'unique'|'sum'|'avg'|'min'|'max'[,...]::
     if multiple regions overlap a single record, the option defines how to treat multiple
     annotation values when setting 'tag' in the destination file: use the first encountered value ignoring
-    the rest ('first'); append allowing duplicates ('append'); append discarding duplicate values ('unique');
+    the rest ('first'); append allowing duplicates ('append'); append even if the appended value is missing,
+    i.e. is a dot ('append-missing'); append discarding duplicate values ('unique');
     sum the values ('sum', numeric fields only); average the values ('avg'); use the minimum value ('min') or
     the maximum ('max').
     +
     Note that this option is intended for use with BED or TAB-delimited annotation files only. Moreover,
-    it is effective only if 'BEG' and 'END' *--columns* are present.
+    it is effective only when either 'REF' and 'ALT' or 'BEG' and 'END' *--columns* are present .
     +
     Multiple rules can be given either as a comma-separated list or giving the option multiple times.
     This is an experimental feature.
@@ -461,6 +469,8 @@ Add or remove annotations.
 
     # Annotate from a bed file (0-based coordinates, half-closed, half-open intervals)
     bcftools annotate -a annots.bed.gz -h annots.hdr -c CHROM,FROM,TO,TAG input.vcf
+
+    # For more examples see http://samtools.github.io/bcftools/howtos/annotate.html
 ----
 
 
@@ -1650,6 +1660,17 @@ For "vertical" merge take a look at *<<concat,bcftools concat>>* or *<<norm,bcft
 *-l, --file-list* 'FILE'::
     Read file names from 'FILE', one file name per line.
 
+*-L, --local-alleles* 'INT'::
+    Sites with many alternate alleles can require extremely large storage space which
+    can exceed the 2GB size limit representable by BCF. This is caused
+    by Number=G tags (such as FORMAT/PL) which store a value for each combination of reference
+    and alternate alleles. The *-L, --local-alleles* option allows to replace such tags
+    with a localized tag (FORMAT/LPL) which only includes a subset of alternate alleles relevant
+    for that sample. A new FORMAT/LAA tag is added which lists 1-based indices of the
+    alternate alleles relevant (local) for the current sample. The number 'INT' gives the
+    maximum number of alternate alleles that can be included in the PL tag. The default value
+    is 0 which disables the feature and outputs values for all alternate alleles.
+   
 *-m, --merge* 'snps'|'indels'|'both'|'all'|'none'|'id'::
     The option controls what types of multiallelic records can be created:
 ----
@@ -1660,6 +1681,11 @@ For "vertical" merge take a look at *<<concat,bcftools concat>>* or *<<norm,bcft
 -m all    ..  SNP records can be merged with indel records
 -m id     ..  merge by ID
 ----
+
+*--no-index*::
+    the option allows to merge files without indexing them first. In order for this
+    option to work, the user must ensure that the input files have chromosomes in
+    the same order and consistent with the order of sequences in the VCF header.
 
 *--no-version*::
     see *<<common_options,Common Options>>*
@@ -2189,6 +2215,9 @@ By default, appropriate system directories are searched for installed plugins.
 
 *remove-overlaps*::
     remove overlapping variants and duplicate sites
+
+*scatter*::
+    intended as an inverse to `bcftools concat`, scatter VCF by chunks or regions, creating multiple VCFs.
 
 *setGT*::
     general tool to set genotypes according to rules requested by the user
@@ -2790,10 +2819,13 @@ that a filter like '--min-af 0.1' will be calculated from INFO/AC and INFO/AN
 when available or FORMAT/GT otherwise. However, it will not attempt to use any other existing
 field, like INFO/AF for example. For that, use '--exclude AF<0.1' instead.
 
-Also note that one must be careful when sample subsetting and filtering is performed in a single command as
-sample removal can change the allele frequency. It may be better to separate the two steps into two
-commands, piping one into the other. Some of these annotations are calculated on the fly but can be
-also taken from the INFO column when present.
+Also note that one must be careful when sample subsetting and filtering is performed in a single command
+because the order of internal operations can influence the result. For example, the *-i/-e* filtering
+is performed before sample removal, but the *-P* filtering is performed after,
+and some are inherently ambiguous, for example allele counts can be taken from the INFO
+column when present but calculated on the fly when absent. Therefore it is strongly recommended to spell out the
+required order explicitly by separating such commands into two steps. (Make sure to use the *-O u* option
+when piping!)
 
 *-c, --min-ac* 'INT'[':nref'|':alt1'|':minor'|':major'|:'nonmajor']::
     minimum allele count (INFO/AC) of sites to be printed.
@@ -2945,6 +2977,14 @@ about the distinction between "&&" vs "&" and "||" vs "|".
         INFO/DP or DP
         FORMAT/DV, FMT/DV, or DV
         FILTER, QUAL, ID, CHROM, POS, REF, ALT[0]
+
+* starting with 1.11, the FILTER column can be queried as follows:
+
+        FILTER="PASS"
+        FILTER="A"          .. exact match, for example "A;B" does not pass
+        FILTER!="A"         .. exact match, for example "A;B" does pass
+        FILTER~"A"          .. both "A" and "A;B" pass
+        FILTER!~"A"         .. neither "A" nor "A;B" pass
 
 * 1 (or 0) to test the presence (or absence) of a flag
 

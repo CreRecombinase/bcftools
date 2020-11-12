@@ -552,7 +552,7 @@ static void apply_variant(args_t *args, bcf1_t *rec)
         }
         if ( rec->n_allele <= ialt ) error("Broken VCF, too few alts at %s:%"PRId64"\n", bcf_seqname(args->hdr,rec),(int64_t) rec->pos+1);
     }
-    else if ( args->output_iupac && !rec->d.allele[0][1] && !rec->d.allele[1][1] )
+    else if ( args->output_iupac && rec->n_allele>1 && !rec->d.allele[0][1] && !rec->d.allele[1][1] )
     {
         char ial = rec->d.allele[0][0];
         char jal = rec->d.allele[1][0];
@@ -576,15 +576,34 @@ static void apply_variant(args_t *args, bcf1_t *rec)
         ialt = 1;
     }
 
+    // For some variant types POS+REF refer to the base *before* the event; in such case set trim_beg
+    int trim_beg = 0;
+    int var_type = bcf_get_variant_type(rec,ialt);
+    int var_len  = rec->d.var[ialt].n;
+    if ( var_type & VCF_INDEL )
+    {
+        // normally indel starts one base after, but not if the first base of the fa reference is deleted
+        if ( rec->d.allele[0][0] == rec->d.allele[ialt][0] )
+            trim_beg = 1;
+        else
+            trim_beg = 0;
+    }
+    else if ( (var_type & VCF_OTHER) && !strcasecmp(rec->d.allele[ialt],"<DEL>") )
+    {
+        trim_beg = 1;
+        var_len  = 1 - rec->rlen;
+    }
+    else if ( (var_type & VCF_OTHER) && !strncasecmp(rec->d.allele[ialt],"<INS",4) ) trim_beg = 1;
+
     // Overlapping variant?
     if ( rec->pos <= args->fa_frz_pos )
     {
         // Can be still OK iff this is an insertion (and which does not follow another insertion, see #888).
         // This still may not be enough for more complicated cases with multiple duplicate positions
         // and other types in between. In such case let the user normalize the VCF and remove duplicates.
+
         int overlap = 0;
-        if ( rec->pos < args->fa_frz_pos || !(bcf_get_variant_type(rec,ialt) & VCF_INDEL) ) overlap = 1;
-        else if ( rec->d.var[ialt].n <= 0 || args->prev_is_insert ) overlap = 1;
+        if ( rec->pos < args->fa_frz_pos || !trim_beg || var_len==0 || args->prev_is_insert ) overlap = 1;
 
         if ( overlap )
         {
@@ -686,16 +705,17 @@ static void apply_variant(args_t *args, bcf1_t *rec)
     if ( len_diff <= 0 )
     {
         // deletion or same size event
-        for (i=0; i<alen; i++)
+        assert( args->fa_buf.l >= idx+rec->rlen );
+        args->prev_base = args->fa_buf.s[idx+rec->rlen-1];
+        args->prev_base_pos = rec->pos + rec->rlen - 1;
+        args->prev_is_insert = 0;
+        args->fa_frz_mod = idx + alen;
+
+        for (i=trim_beg; i<alen; i++)
             args->fa_buf.s[idx+i] = rec->d.allele[ialt][i];
 
         if ( len_diff )
             memmove(args->fa_buf.s+idx+alen,args->fa_buf.s+idx+rec->rlen,args->fa_buf.l-idx-rec->rlen);
-
-        args->prev_base = rec->d.allele[0][rec->rlen - 1];
-        args->prev_base_pos = rec->pos + rec->rlen - 1;
-        args->prev_is_insert = 0;
-        args->fa_frz_mod = idx + alen;
     }
     else
     {
