@@ -413,12 +413,13 @@ test_vcf_annotate($opts,in=>'annotate20.dst',vcf=>'annotate20.src',out=>'annotat
 test_vcf_annotate($opts,in=>'annotate20.dst',vcf=>'annotate20.src',out=>'annotate20.3.out',args=>'-c -FMT/GT');
 test_vcf_annotate($opts,in=>'annotate.multi',tab=>'annotate.multi',out=>'annotate.multi.1.out',args=>'-c CHROM,POS,REF,ALT,ANN -l ANN:append');
 test_vcf_annotate($opts,in=>'annotate.missing-append',tab=>'annotate.missing-append',out=>'annotate.missing-append.1.out',args=>'-c CHROM,POS,REF,ALT,STR,INT,FLT -l STR:append-missing,INT:append-missing,FLT:append-missing');
+test_vcf_annotate($opts,in=>'annotate9',tab=>'annots9',out=>'annotate9.out',args=>'-c CHROM,POS,REF,ALT,+ID');
+test_vcf_annotate($opts,in=>'annotate21',out=>'annotate29.out',args=>'--rename-annots {PATH}/annotate21.txt');
 test_vcf_plugin($opts,in=>'plugin1',out=>'missing2ref.out',cmd=>'+missing2ref --no-version');
 test_vcf_plugin($opts,in=>'plugin1',out=>'missing2ref.out',cmd=>'+setGT --no-version',args=>'-- -t . -n 0');
 test_vcf_plugin($opts,in=>'setGT',out=>'setGT.1.out',cmd=>'+setGT --no-version',args=>'-- -t q -n 0 -i \'GT~"." && FMT/DP=30 && GQ=150\'');
 test_vcf_plugin($opts,in=>'setGT.2',out=>'setGT.2.out',cmd=>'+setGT --no-version',args=>'-- -t q -n . -i \'GT[@{QPATH}/setGT.samples.txt]="het"\'');
 test_vcf_plugin($opts,in=>'setGT.2',out=>'setGT.3.out',cmd=>'+setGT --no-version',args=>'-- -t q -n . -i \'GT[@{QPATH}/setGT.samples.txt]="het" & binom(AD[@{QPATH}/setGT.samples.txt])<0.1\'');
-test_vcf_annotate($opts,in=>'annotate9',tab=>'annots9',out=>'annotate9.out',args=>'-c CHROM,POS,REF,ALT,+ID');
 test_vcf_plugin($opts,in=>'plugin1',out=>'fill-AN-AC.out',cmd=>'+fill-AN-AC --no-version');
 test_vcf_plugin($opts,in=>'dosage',out=>'dosage.1.out',cmd=>'+dosage',args=>'-- -t PL');
 test_vcf_plugin($opts,in=>'dosage',out=>'dosage.2.out',cmd=>'+dosage',args=>'-- -t GL');
@@ -508,6 +509,7 @@ test_vcf_plugin($opts,in=>'split-vep.5',out=>'split-vep.16.out',cmd=>'+split-vep
 test_vcf_plugin($opts,in=>'split-vep.6',out=>'split-vep.17.out',cmd=>'+split-vep',args=>qq[-c SAS_AF | grep ID=SAS_AF]);
 test_vcf_plugin($opts,in=>'split-vep.6',out=>'split-vep.18.out',cmd=>'+split-vep',args=>qq[-c - | grep -v ^#]);
 test_vcf_plugin($opts,in=>'split-vep.6',out=>'split-vep.19.out',cmd=>'+split-vep',args=>qq[-c - -s worst | grep -v ^#]);
+test_vcf_plugin($opts,in=>'split-vep.7',out=>'split-vep.20.out',cmd=>'+split-vep',args=>qq[--annotation 'ANN' -c IMPACT -i 'INFO/IMPACT[*] ~ "MODIFIER"' | grep -v ^#]);
 test_vcf_plugin($opts,in=>'parental-origin',out=>'parental-origin.1.out',cmd=>'+parental-origin',args=>qq[-r 20:100 -p proband,father,mother -t del | grep -v ^#]);
 test_vcf_plugin($opts,in=>'parental-origin',out=>'parental-origin.2.out',cmd=>'+parental-origin',args=>qq[-r 20:101 -p proband,father,mother -t del | grep -v ^#]);
 test_vcf_plugin($opts,in=>'parental-origin',out=>'parental-origin.3.out',cmd=>'+parental-origin',args=>qq[-r 20:102 -p proband,father,mother -t del | grep -v ^#]);
@@ -538,6 +540,8 @@ test_vcf_concat($opts,in=>['concat.2.a','concat.2.b'],out=>'concat.4.bcf.out',do
 test_vcf_concat($opts,in=>['concat.3.a','concat.3.b','concat.3.0','concat.3.c','concat.3.d','concat.3.e','concat.3.f'],out=>'concat.3.vcf.out',do_bcf=>0,args=>'-l');
 test_vcf_concat($opts,in=>['concat.3.a','concat.3.b','concat.3.0','concat.3.c','concat.3.d','concat.3.e','concat.3.f'],out=>'concat.3.bcf.out',do_bcf=>1,args=>'-l');
 test_naive_concat($opts,name=>'naive_concat',max_hdr_lines=>10000,max_body_lines=>10000,nfiles=>10);
+test_vcf_concat($opts,in=>['concat.4.a','concat.4.b'],out=>'concat.5.out',do_bcf=>0,args=>'-l');
+test_vcf_concat($opts,in=>['concat.4.a','concat.4.b'],out=>'concat.5.out',do_bcf=>1,args=>'-l');
 test_vcf_reheader($opts,in=>'reheader',out=>'reheader.1.out',header=>'reheader.hdr');
 test_vcf_reheader($opts,in=>'reheader',out=>'reheader.2.out',samples=>'reheader.samples');
 test_vcf_reheader($opts,in=>'reheader',out=>'reheader.2.out',samples=>'reheader.samples2');
@@ -1319,6 +1323,7 @@ sub test_vcf_annotate
 {
     my ($opts,%args) = @_;
     my ($annot_fname,$in_fname,$hdr);
+    $args{args} =~ s/{PATH}/$$opts{path}/g;
     if ( exists($args{tab}) )
     {
         bgzip_tabix($opts,file=>$args{tab},suffix=>'tab',args=>'-s1 -b2 -e2');
