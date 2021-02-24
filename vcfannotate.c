@@ -1,6 +1,6 @@
 /*  vcfannotate.c -- Annotate and edit VCF/BCF files.
 
-    Copyright (C) 2013-2020 Genome Research Ltd.
+    Copyright (C) 2013-2021 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -501,7 +501,7 @@ static int setter_filter(args_t *args, bcf1_t *line, annot_col_t *col, void *dat
     if ( tab->cols[col->icol] && tab->cols[col->icol][0]=='.' && !tab->cols[col->icol][1] ) return 0; // don't replace with "."
     hts_expand(int,1,args->mtmpi,args->tmpi);
     args->tmpi[0] = bcf_hdr_id2int(args->hdr_out, BCF_DT_ID, tab->cols[col->icol]);
-    if ( args->tmpi[0]<0 ) error("The FILTER is not defined in the header: %s\n", tab->cols[col->icol]);
+    if ( args->tmpi[0]<0 ) error("The FILTER \"%s\" is not defined in the header, was the -h option provided?\n", tab->cols[col->icol]);
     if ( col->replace==SET_OR_APPEND ) return bcf_add_filter(args->hdr_out,line,args->tmpi[0]);
     if ( col->replace!=REPLACE_MISSING )
     {
@@ -2267,7 +2267,7 @@ static void init_columns(args_t *args)
             }
             int hdr_id = bcf_hdr_id2int(args->hdr_out, BCF_DT_ID, key_dst);
             if ( !bcf_hdr_idinfo_exists(args->hdr_out,BCF_HL_FMT,hdr_id) )
-                error("The tag \"%s\" is not defined in %s\n", str.s, args->targets_fname);
+                error("The tag \"%s\" is not defined in %s, was the -h option provided?\n", str.s, args->targets_fname);
             args->ncols++; args->cols = (annot_col_t*) realloc(args->cols,sizeof(annot_col_t)*args->ncols);
             annot_col_t *col = &args->cols[args->ncols-1];
             memset(col,0,sizeof(*col));
@@ -2354,14 +2354,12 @@ static void init_columns(args_t *args)
                         // transferring ID column into a new INFO tag
                         tmp.l = 0;
                         ksprintf(&tmp,"##INFO=<ID=%s,Number=1,Type=String,Description=\"Transferred ID column\">",key_dst);
-                        col->getter = vcf_getter_id2str;
                     }
                     else if ( !strcasecmp("FILTER",key_src) && !explicit_src_info )
                     {
                         // transferring FILTER column into a new INFO tag
                         tmp.l = 0;
                         ksprintf(&tmp,"##INFO=<ID=%s,Number=1,Type=String,Description=\"Transferred FILTER column\">",key_dst);
-                        col->getter = vcf_getter_filter2str;
                     }
                     else
                     {
@@ -2376,7 +2374,7 @@ static void init_columns(args_t *args)
                                 *ptr = 0; tmp.l = 0; ksprintf(&tmp,"%s:=%s",key_src,ptr+1); *ptr = '=';
                                 error("The tag \"%s\" is not defined, is this what you want \"%s\" ?\n",key_src,tmp.s);
                             }
-                            error("The tag \"%s\" is not defined in %s\n", key_src,args->files->readers[1].fname);
+                            error("The tag \"%s\" is not defined in %s, was the -h option provided?\n", key_src,args->files->readers[1].fname);
                         }
                         tmp.l = 0;
                         bcf_hrec_format_rename(hrec, key_dst, &tmp);
@@ -2387,8 +2385,13 @@ static void init_columns(args_t *args)
                     hdr_id = bcf_hdr_id2int(args->hdr_out, BCF_DT_ID, key_dst);
                 }
                 else
-                    error("The tag \"%s\" is not defined in %s\n", key_src, args->targets_fname);
+                    error("The tag \"%s\" is not defined in %s, was the -h option provided?\n", key_src, args->targets_fname);
                 assert( bcf_hdr_idinfo_exists(args->hdr_out,BCF_HL_INFO,hdr_id) );
+            }
+            if  ( args->tgts_is_vcf )
+            {
+                if ( !strcasecmp("ID",key_src) && !explicit_src_info ) col->getter = vcf_getter_id2str;
+                else if ( !strcasecmp("FILTER",key_src) && !explicit_src_info ) col->getter = vcf_getter_filter2str;
             }
             col->number = bcf_hdr_id2length(args->hdr_out,BCF_HL_INFO,hdr_id);
             switch ( bcf_hdr_id2type(args->hdr_out,BCF_HL_INFO,hdr_id) )
@@ -2635,7 +2638,7 @@ static void init_data(args_t *args)
         if ( args->rename_chrs ) rename_chrs(args, args->rename_chrs);
         if ( args->rename_annots ) rename_annots(args, args->rename_annots);
 
-        args->out_fh = hts_open(args->output_fname,hts_bcf_wmode(args->output_type));
+        args->out_fh = hts_open(args->output_fname,hts_bcf_wmode2(args->output_type,args->output_fname));
         if ( args->out_fh == NULL ) error("[%s] Error: cannot write to \"%s\": %s\n", __func__,args->output_fname, strerror(errno));
         if ( args->n_threads )
             hts_set_opt(args->out_fh, HTS_OPT_THREAD_POOL, args->files->p);
@@ -3089,8 +3092,12 @@ int main_vcfannotate(int argc, char *argv[])
                     default: error("The output type \"%s\" not recognised\n", optarg);
                 };
                 break;
-            case 'e': args->filter_str = optarg; args->filter_logic |= FLT_EXCLUDE; break;
-            case 'i': args->filter_str = optarg; args->filter_logic |= FLT_INCLUDE; break;
+            case 'e':
+                if ( args->filter_str ) error("Error: only one -i or -e expression can be given, and they cannot be combined\n");
+                args->filter_str = optarg; args->filter_logic |= FLT_EXCLUDE; break;
+            case 'i':
+                if ( args->filter_str ) error("Error: only one -i or -e expression can be given, and they cannot be combined\n");
+                args->filter_str = optarg; args->filter_logic |= FLT_INCLUDE; break;
             case 'x': args->remove_annots = optarg; break;
             case 'a': args->targets_fname = optarg; break;
             case 'r': args->regions_list = optarg; break;

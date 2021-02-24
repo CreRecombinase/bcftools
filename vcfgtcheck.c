@@ -29,6 +29,7 @@ THE SOFTWARE.  */
 #include <assert.h>
 #include <ctype.h>
 #include <string.h>
+#include <strings.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -37,6 +38,7 @@ THE SOFTWARE.  */
 #include <htslib/synced_bcf_reader.h>
 #include <htslib/vcfutils.h>
 #include <htslib/kbitset.h>
+#include <htslib/hts_os.h>
 #include <inttypes.h>
 #include <sys/time.h>
 #include "bcftools.h"
@@ -177,28 +179,14 @@ static inline void diff_sites_reset(args_t *args)
 {
     kbs_clear(args->kbs_diff);
 }
-/* 
-    Generage a 32-bit random number, taken from
-        https://www.pcg-random.org/download.html#minimal-c-implementation
-*/
-typedef struct { uint64_t state;  uint64_t inc; } pcg32_random_t;
-static uint32_t pcg32_random_r(pcg32_random_t* rng)
-{
-    uint64_t oldstate = rng->state;
-    rng->state = oldstate * 6364136223846793005ULL + (rng->inc|1);
-    uint32_t xorshifted = ((oldstate >> 18u) ^ oldstate) >> 27u;
-    uint32_t rot = oldstate >> 59u;
-    return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
-}
 static inline void diff_sites_push(args_t *args, int ndiff, int rid, int pos)
 {
-    static pcg32_random_t rng = { 0x853c49e6748fea9bULL, 0xda3e39cb94b95bdbULL };
     diff_sites_t *dat = (diff_sites_t*) malloc(args->diff_sites_size);
     memset(dat,0,sizeof(*dat)); // for debugging: prevent warnings about uninitialized memory coming from struct padding (not needed after rand added)
     dat->ndiff = ndiff;
     dat->rid  = rid;
     dat->pos  = pos;
-    dat->rand = pcg32_random_r(&rng);
+    dat->rand = hts_lrand48();
     memcpy(dat->kbs_dat,args->kbs_diff->b,args->kbs_diff->n*sizeof(unsigned long));
     extsort_push(args->es,dat);
 }
@@ -244,6 +232,8 @@ static void init_samples(char *list, int list_is_file, int **smpl, int *nsmpl, b
 
 static void init_data(args_t *args)
 {
+    hts_srand48(0);
+
     args->files = bcf_sr_init();
     if ( args->regions && bcf_sr_set_regions(args->files, args->regions, args->regions_is_file)<0 ) error("Failed to read the regions: %s\n", args->regions);
     if ( args->targets && bcf_sr_set_targets(args->files, args->targets, args->targets_is_file, 0)<0 ) error("Failed to read the targets: %s\n", args->targets);

@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (c) 2018-2020 Genome Research Ltd.
+   Copyright (c) 2018-2021 Genome Research Ltd.
 
    Author: Petr Danecek <pd3@sanger.ac.uk>
    
@@ -197,7 +197,7 @@ static void init_data(args_t *args)
     args->hdr = bcf_sr_get_header(args->sr,0);
     args->hdr_out = bcf_hdr_dup(args->hdr);
     if ( args->annots & PRINT_PASSOC )
-        bcf_hdr_append(args->hdr_out, "##INFO=<ID=PASSOC,Number=1,Type=Float,Description=\"Fisher's exact test probability of genotypic assocation (REF vs non-REF allele)\">");
+        bcf_hdr_append(args->hdr_out, "##INFO=<ID=PASSOC,Number=1,Type=Float,Description=\"Fisher's exact test probability of genotypic association (REF vs non-REF allele)\">");
     if ( args->annots & PRINT_FASSOC )
         bcf_hdr_append(args->hdr_out, "##INFO=<ID=FASSOC,Number=2,Type=Float,Description=\"Proportion of non-REF allele in controls and cases\">");
     if ( args->annots & PRINT_NASSOC )
@@ -213,7 +213,7 @@ static void init_data(args_t *args)
     read_sample_list_or_file(args->hdr, args->control_samples_str, &args->control_smpl, &args->ncontrol_smpl, args->force_samples);
     read_sample_list_or_file(args->hdr, args->case_samples_str, &args->case_smpl, &args->ncase_smpl, args->force_samples);
 
-    args->out_fh = hts_open(args->output_fname,hts_bcf_wmode(args->output_type));
+    args->out_fh = hts_open(args->output_fname,hts_bcf_wmode2(args->output_type,args->output_fname));
     if ( args->out_fh == NULL ) error("Can't write to \"%s\": %s\n", args->output_fname, strerror(errno));
     if ( bcf_hdr_write(args->out_fh, args->hdr_out)!=0 ) error("[%s] Error: cannot write to %s\n", __func__,args->output_fname);
 
@@ -462,8 +462,12 @@ int run(int argc, char **argv)
             case 'a': args->annots_str = optarg; break;
             case '0': args->control_samples_str = optarg; break;
             case '1': args->case_samples_str = optarg; break;
-            case 'e': args->filter_str = optarg; args->filter_logic |= FLT_EXCLUDE; break;
-            case 'i': args->filter_str = optarg; args->filter_logic |= FLT_INCLUDE; break;
+            case 'e':
+                if ( args->filter_str ) error("Error: only one -i or -e expression can be given, and they cannot be combined\n");
+                args->filter_str = optarg; args->filter_logic |= FLT_EXCLUDE; break;
+            case 'i':
+                if ( args->filter_str ) error("Error: only one -i or -e expression can be given, and they cannot be combined\n");
+                args->filter_str = optarg; args->filter_logic |= FLT_INCLUDE; break;
             case 't': args->targets = optarg; break;
             case 'T': args->targets = optarg; args->targets_is_file = 1; break;
             case 'r': args->regions = optarg; break;

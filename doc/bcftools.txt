@@ -552,7 +552,8 @@ demand. The original calling model can be invoked with the *-c* option.
 *-f, --format-fields* 'list'::
     comma-separated list of FORMAT fields to output for each sample. Currently
     GQ and GP fields are supported. For convenience, the fields can be given
-    as lower case letters.
+    as lower case letters. Prefixed with "&#94;" indicates a request for tag
+    removal of auxiliary tags useful only for calling.
 
 *-F, --prior-freqs* 'AN','AC'::
     take advantage of prior knowledge of population allele frequencies. The
@@ -574,13 +575,13 @@ demand. The original calling model can be invoked with the *-c* option.
     bcftools mpileup [...] -Ou | bcftools annotate -a AFs.tab.gz -h AFs.hdr -c CHROM,POS,REF,ALT,REF_AN,REF_AC -Ou | bcftools call -mv -F REF_AN,REF_AC [...]
 ----
 
-*-G, --group-samples* 'FILE'|'-'::
+*-G, --group-samples* [TAG:]'FILE'|'-'::
     by default, all samples are assumed to come from a single population. This option allows to group samples
     into populations and apply the HWE assumption within but not across the populations. 'FILE' is a tab-delimited
     text file with sample names in the first column and group names in the second column. If '-' is
     given instead, no HWE assumption is made at all and single-sample calling is performed. (Note that
     in low coverage data this inflates the rate of false positives.) The *-G* option requires the presence of
-    FORMAT/AD generated at the *bcftools mpileup* step by providing the *-a FMT/AD* option.
+    per-sample FORMAT/QS or FORMAT/AD tag generated with *bcftools mpileup -a QS* (or *-a AD*). 
 
 *-g, --gvcf* 'INT'::
     output also gVCF blocks of homozygous REF calls. The parameter 'INT' is the
@@ -816,7 +817,7 @@ depth information, such as INFO/AD or FORMAT/AD. For that, consider using the
 *-f, --fasta-ref* 'FILE'::
     reference sequence in fasta format
 
-*-H, --haplotype* '1'|'2'|'R'|'A'|'LR'|'LA'|'SR'|'SA'|'1pIu'|'2pIu'::
+*-H, --haplotype* '1'|'2'|'R'|'A'|'I'|'LR'|'LA'|'SR'|'SA'|'1pIu'|'2pIu'::
     choose which allele from the FORMAT/GT field to use (the codes are case-insensitive):
     
         '1';;
@@ -830,6 +831,9 @@ depth information, such as INFO/AD or FORMAT/AD. For that, consider using the
 
         'A';;
             the ALT allele (in heterozygous genotypes)
+
+        'I';;
+            IUPAC code for all genotypes
 
         'LR, LA';;
             the longer allele. If both have the same length, use the REF allele (LR), or the ALT allele  (LA)
@@ -849,10 +853,23 @@ depth information, such as INFO/AD or FORMAT/AD. For that, consider using the
 *-I, --iupac-codes*::
     output variants in the form of IUPAC ambiguity codes
 
+*--mark-del* 'CHAR'::
+    instead of removing sequence, insert CHAR for deletions
+
+*--mark-ins* 'uc'|'lc'::
+    highlight inserted sequence in uppercase (uc) or lowercase (lc), leaving the rest of the sequence as is
+
+*--mark-snv* 'uc'|'lc'::
+    highlight substitutions in uppercase (uc) or lowercase (lc), leaving the rest of the sequence as is
+
 *-m, --mask* 'FILE'::
-    BED file or TAB file with regions to be replaced with N. See discussion
+    BED file or TAB file with regions to be replaced with N (the default) or as specified by
+    the next *--mask-with* option. See discussion
     of *--regions-file* in *<<common_options,Common Options>>* for file
     format details.
+
+*--mask-with* 'CHAR'|'lc'|'uc'::
+    replace sequence from *--mask* with CHAR, skipping overlapping variants, or change to lowercase (lc) or uppercase (uc)
 
 *-M, --missing* 'CHAR'::
     instead of skipping the missing genotypes, output the character CHAR (e.g. "?")
@@ -1398,7 +1415,8 @@ Without the *-g* option, multi-sample cross-check of samples in 'query.vcf.gz' i
 
 *--n-matches* 'INT'::
     Print only top INT matches for each sample, 0 for unlimited. Use negative value
-    to sort by HWE probability rather than the number of discordant sites.
+    to sort by HWE probability rather than the number of discordant sites. Note
+    that average score is used to determine the top matches, not absolute values.
 
 *--no-HWE-prob*::
     Disable calculation of HWE probability to reduce memory requirements with 
@@ -1761,8 +1779,7 @@ multiple regions and many alignment files are processed.
     Coefficient  for  downgrading mapping quality for reads containing
     excessive mismatches. Given a read with a phred-scaled probability q of
     being generated from the mapped position, the new mapping quality is
-    about sqrt((INT-q)/INT)*INT. A zero value disables this functionality; if
-    enabled, the recommended value for BWA is 50. [0]
+    about sqrt((INT-q)/INT)*INT. A zero value (the default) disables this functionality.
 
 *-d, --max-depth* 'INT'::
     At a position, read maximally 'INT' reads per input file. Note that
@@ -2243,7 +2260,7 @@ By default, appropriate system directories are searched for installed plugins.
 *tag2tag*::
     convert between similar tags, such as GL and GP
 
-*trio-dnm*::
+*trio-dnm2*::
     screen variants for possible de-novo mutations in trios
 
 *trio-stats*::
