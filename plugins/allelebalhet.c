@@ -29,12 +29,12 @@ DEALINGS IN THE SOFTWARE.  */
 
 typedef struct _args_t
 {
-  bcf_hdr_t *hdr;     /*! VCF file header */
-  int nsmpl;          /*! number of samples, can be determined from header but is needed in multiple contexts */
-  uint32_t *gt_arr;        /*! temporary array, to store GTs of current line/record */
-  int ngt_arr;        /*! hold the number of current GT array entries */
-  uint32_t *ad_arr;        /*! temporary array, to store ADs of current line/record*/
-  int nad_arr;        /*! hold the number of current AD array entries */
+  bcf_hdr_t *hdr;        /*! VCF file header */
+  uint32_t *gt_arr;     /*! temporary array, to store GTs of current line/record */
+  int ngt_arr;          /*! hold the number of current GT array entries */
+  uint32_t *ad_arr;     /*! temporary array, to store ADs of current line/record*/
+  int nad_arr;          /*! hold the number of current AD array entries */
+  float snp_ab_thresh;  
 } args_t;
 
 static args_t args;
@@ -42,7 +42,7 @@ static args_t args;
 const char *about(void)
 {
     return
-        "Filter sites with bad allele balance.\n";
+        "Filter sites with heterozygous genotype calls that.\n";
 }
 
 const char *usage(void)
@@ -72,7 +72,6 @@ const char *usage(void)
 */
 int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
 {
-  args.nsmpl = bcf_hdr_nsamples(in);
   args.hdr = bcf_hdr_dup(in);
 
   args.gt_arr = NULL; args.ngt_arr = 0;
@@ -89,42 +88,55 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
 bcf1_t *process(bcf1_t *rec)
 {
   if ( !rec->n_sample ) return rec;
-
+  
   int ngts = bcf_get_genotypes(args.hdr, rec, &args.gt_arr, &args.ngt_arr);
-  fprintf(stderr, "ngts=%d\n", ngts);
   if ( ngts<0 ) return rec; // no genotypes, ouput record
 
-  if(ngts / args.nsmpl != 2) return rec; // strange ploidy, just leave untouched for now
+  if(ngts / rec->n_sample != 2) return rec; // strange ploidy, just leave untouched for now
 
   int nad = bcf_get_format_int32(args.hdr, rec, "AD", &args.ad_arr, &args.nad_arr);
   if ( nad<0 ) return rec; // no AD field, output record
-  fprintf(stderr, "nad=%d\n", nad);
 
-  if(ngts != nad) return rec; // AD values don't match GTs
-  
-  uint32_t i = 0;
-  for (i=0; i<args.nsmpl; i++) {
+  if(ngts != nad) return rec; // AD values don't match GTs, output record
+
+  // Scan through GT and AD values for each sample.
+  uint32_t i = 0, ad0_het = 0, ad1_het = 0;
+  for (i=0; i< rec->n_sample; i++) {
     uint32_t *gt = args.gt_arr + i*2;
     uint32_t *ad = args.ad_arr + i*2;
-    
-    if ( gt[0]==bcf_int32_vector_end ) break;
-    if ( gt[1]==bcf_int32_vector_end ) break;
+
+    // Are we done? 
+    if ( gt[0] == bcf_int32_vector_end ) break;
+    if ( gt[1] == bcf_int32_vector_end ) break;
 
     // Not a het if any one is missing.
     if(bcf_gt_is_missing(gt[0]) || bcf_gt_is_missing(gt[1])) continue; 
-      
-    int allele_index0 = bcf_gt_allele(gt[0]);
-    int allele_index1 = bcf_gt_allele(gt[1]);
 
-    if(allele_index0 != allele_index1) {
-      fprintf(stderr, "%d(%d),%d(%d) ", allele_index0, ad[0], allele_index1, ad[1]);
+    // TODO: How to handle multi-allelics? 
+    int allele0 = bcf_gt_allele(gt[0]);
+    int allele1 = bcf_gt_allele(gt[1]);
+
+    if(allele0 != allele1) {
+      // Found a het site, count reads from the two alleles.
+      ad0_het += ad[0];
+      ad1_het += ad[1];
     }
   }
-  fprintf(stderr, "\n");
+
+  // Total number of reads from het sites must be > 0
+  uint32_t total_het = ad0_het + ad1_het;
+  if(total_het > 0) {
+    float est = (float)ad0_het / total_het;
+    int failed_flag = 0;
+    fprintf(stderr, "est=%f %d\n", est, total_het);
+
+    // TOOD: This is only a good estimate if there are a minimum number of total reads.
+    if(est > 0.7 || est < 0.3) failed_flag = 1;
   
-  
-  
-  return rec;
+    if(failed_flag) return NULL; else return rec;
+  } else {
+    return rec;
+  }
 }
 
 
