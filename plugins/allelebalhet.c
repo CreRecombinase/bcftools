@@ -22,6 +22,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.  */
 
+#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <inttypes.h>
@@ -34,7 +35,7 @@ typedef struct _args_t
   int ngt_arr;           /*! hold the number of current GT array entries */
   uint32_t *ad_arr;      /*! temporary array, to store ADs of current line/record*/
   int nad_arr;           /*! hold the number of current AD array entries */
-  float snp_ab_thresh;   /*! threshold for heterozygous allele balance filter */
+  float het_ab_thresh;   /*! threshold for heterozygous allele balance filter */
   uint32_t min_het_covg; /*! minimum coverage of heterozygous sites across samples before applying filter */
 } args_t;
 
@@ -59,8 +60,8 @@ const char *usage(void)
         "   run \"bcftools plugin\" for a list of common options\n"
         "\n"
         "Plugin options:\n"
-        "  -ad,---a   \n"
-        "             \n"
+        "  -a,--   \n"
+        "  -m,--mindepth     \n"
         "\n"
         "Example:\n"
         "   bcftools plugin allelebalhet in.vcf -- -adcut 0.1 \n"
@@ -74,8 +75,26 @@ const char *usage(void)
 */
 int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
 {
-  args.hdr = bcf_hdr_dup(in);
+  args.het_ab_thresh = 0.3; 
+  args.min_het_covg = 300;
 
+  static struct option loptions[] =
+    {
+      {"mindepth",1,0,'m'},
+      {"allelebal",1,0,'a'},      
+      {0,0,0,0}
+    };
+  int c;
+  while ((c = getopt_long(argc, argv, "m:a:?h",loptions,NULL)) >= 0)    {
+    switch (c) {
+    case 'm': args.min_het_covg = atoi(optarg); break;
+    case 'a': args.het_ab_thresh = atof(optarg); break;      
+    case 'h': case '?':
+    default: fprintf(stderr,"%s", usage()); exit(1); break;
+    }
+  }
+  
+  args.hdr = bcf_hdr_dup(in);  
   args.gt_arr = NULL; args.ngt_arr = 0;
   args.ad_arr = NULL; args.nad_arr = 0;
     
@@ -89,7 +108,7 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
 */
 bcf1_t *process(bcf1_t *rec)
 {
-  if ( !rec->n_sample ) return rec;
+  if ( !rec->n_sample ) return rec; // no samples, skip record. 
   
   int ngts = bcf_get_genotypes(args.hdr, rec, &args.gt_arr, &args.ngt_arr);
   if ( ngts<0 ) return rec; // no genotypes, ouput record
