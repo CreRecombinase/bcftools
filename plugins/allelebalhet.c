@@ -1,4 +1,4 @@
-/*  plugins/allelebalhet.c -- allele balannce on hets
+/*  plugins/allelebalhet.c -- allele balance on across sample hets
 
     Copyright (C) 2021 Genentech Inc.
 
@@ -30,11 +30,12 @@ DEALINGS IN THE SOFTWARE.  */
 typedef struct _args_t
 {
   bcf_hdr_t *hdr;        /*! VCF file header */
-  uint32_t *gt_arr;     /*! temporary array, to store GTs of current line/record */
-  int ngt_arr;          /*! hold the number of current GT array entries */
-  uint32_t *ad_arr;     /*! temporary array, to store ADs of current line/record*/
-  int nad_arr;          /*! hold the number of current AD array entries */
-  float snp_ab_thresh;  
+  uint32_t *gt_arr;      /*! temporary array, to store GTs of current line/record */
+  int ngt_arr;           /*! hold the number of current GT array entries */
+  uint32_t *ad_arr;      /*! temporary array, to store ADs of current line/record*/
+  int nad_arr;           /*! hold the number of current AD array entries */
+  float snp_ab_thresh;   /*! threshold for heterozygous allele balance filter */
+  uint32_t min_het_covg; /*! minimum coverage of heterozygous sites across samples before applying filter */
 } args_t;
 
 static args_t args;
@@ -42,15 +43,16 @@ static args_t args;
 const char *about(void)
 {
     return
-        "Filter sites with heterozygous genotype calls that.\n";
+        "Filter variant if extreme imbalance at het sites across samples.\n";
 }
 
 const char *usage(void)
 {
     return
         "\n"
-        "About:   \n"
-        "         \n"
+        "About:   Using the AD tag, computes the coverage of each allele at het sites across all samples.\n"
+        "         Filters variant if there is extreme imbalance between alleles. Only applies filter \n"
+        "         if het sites have a minimum total cross sample coverage. \n"      
         "Usage:   bcftools +allelebalhet <multisample.bcf/.vcf.gz> [General Options] -- [Plugin Options] \n"
         "\n"
         "Options:\n"
@@ -61,7 +63,7 @@ const char *usage(void)
         "             \n"
         "\n"
         "Example:\n"
-        "   bcftools +allelebalhet in.vcf -- -adcut 0.1 \n"
+        "   bcftools plugin allelebalhet in.vcf -- -adcut 0.1 \n"
         "\n";
 }
 
