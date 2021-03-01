@@ -60,8 +60,8 @@ const char *usage(void)
         "   run \"bcftools plugin\" for a list of common options\n"
         "\n"
         "Plugin options:\n"
-        "  -a,--   \n"
-        "  -m,--mindepth     \n"
+        "  -m,--mindepth <integer>  min depth of coverage of het sites accross samples\n"
+        "  -a,--maxabal <float>     filter if het site allele balance < maxabal or > ( 1-maxabal ) \n"
         "\n"
         "Example:\n"
         "   bcftools plugin allelebalhet in.vcf -- -adcut 0.1 \n"
@@ -78,12 +78,12 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
   args.het_ab_thresh = 0.3; 
   args.min_het_covg = 300;
 
-  static struct option loptions[] =
-    {
+  static struct option loptions[] =  {
       {"mindepth",1,0,'m'},
-      {"allelebal",1,0,'a'},      
+      {"abal",1,0,'a'},      
       {0,0,0,0}
-    };
+  };
+  
   int c;
   while ((c = getopt_long(argc, argv, "m:a:?h",loptions,NULL)) >= 0)    {
     switch (c) {
@@ -118,7 +118,7 @@ bcf1_t *process(bcf1_t *rec)
   int nad = bcf_get_format_int32(args.hdr, rec, "AD", &args.ad_arr, &args.nad_arr);
   if ( nad<0 ) return rec; // no AD field, output record
 
-  if(ngts != nad) return rec; // AD values don't match GTs, output record
+  if(ngts != nad) return rec; // number AD values don't match GTs, output record
 
   // Scan through GT and AD values for each sample.
   uint32_t i = 0, ad0_het = 0, ad1_het = 0;
