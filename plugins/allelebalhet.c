@@ -120,34 +120,43 @@ bcf1_t *process(bcf1_t *rec)
 
   if(ngts != nad) return rec; // number AD values don't match GTs, output record
 
+  const uint32_t n_alts = rec->n_allele-1; // number of alternate sites at the locus
+  if(n_alts==0) // If the site is monoallelic it can't have hets, so just return the site
+    return rec;
+
+  uint32_t adalt_het[n_alts]; // Store the number of alternate allele reads in a C11 VLA (we can switch to stuffing things in the global struct too)
+  memset(adalt_het, 0, n_alts*sizeof(*adalt_het));
   // Scan through GT and AD values for each sample.
-  uint32_t i = 0, ad0_het = 0, ad1_het = 0;
-  for (i=0; i< rec->n_sample; i++) {
-    uint32_t *gt = args.gt_arr + i*2;
-    uint32_t *ad = args.ad_arr + i*2;
+  uint32_t adref_het = 0;
+  for (uint32_t i=0; i< rec->n_sample; i++) {
+    uint32_t *gt = args.gt_arr + i*rec->n_allele;
+    uint32_t *ad = args.ad_arr + i*rec->n_allele;
 
     // Are we done? 
     if ( gt[0] == bcf_int32_vector_end ) break;
-    if ( gt[1] == bcf_int32_vector_end ) break;
+    if(bcf_gt_is_missing(gt[0])) continue;
+    adref_het += ad[0];
+    int allele_ref = bcf_gt_allele(gt[0]);
+    for(int a=0; a<n_alts; a++){
+      const int allele_index = a+i;
+      if ( gt[allele_index] == bcf_int32_vector_end ) break;
+      if(bcf_gt_is_missing(gt[allele_index])) continue;
 
-    // Not a het if any one is missing.
-    if(bcf_gt_is_missing(gt[0]) || bcf_gt_is_missing(gt[1])) continue; 
+      int allele_alt = bcf_gt_allele(gt[allele_index]);
 
-    // TODO: How to handle multi-allelics? 
-    int allele0 = bcf_gt_allele(gt[0]);
-    int allele1 = bcf_gt_allele(gt[1]);
-
-    if(allele0 != allele1) {
+      if(allele_ref != allele_alt) {
       // Found a het site, count reads from the two alleles.
-      ad0_het += ad[0];
-      ad1_het += ad[1];
+
+      adalt_het[a] += ad[allele_index];
+    }
     }
   }
 
+  for(int a=0; a<n_alts; a++){
   // Total number of reads from het sites must be > 0
-  uint32_t total_het = ad0_het + ad1_het;
-  if(total_het > 0) {
-    float est = (float)ad0_het / total_het;
+    uint32_t total_het = adref_het + adalt_het[a];
+    if(total_het > 0) {
+      float est = (float)adref_het / total_het;
     int failed_flag = 0;
     fprintf(stderr, "est=%f %d\n", est, total_het);
 
