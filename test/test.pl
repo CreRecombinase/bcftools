@@ -204,6 +204,8 @@ test_vcf_query($opts,in=>'query.filter.9',out=>'query.72.out',args=>q[-f'[%POS  
 test_vcf_query($opts,in=>'query.filter.10',out=>'query.73.out',args=>q[-f'%POS  %NUM_TAG\\n' -i'COUNT(INFO/NUM_TAG)=2']);
 test_vcf_query($opts,in=>'query.filter.10',out=>'query.74.out',args=>q[-f'%POS  %STR_TAG\\n' -i'COUNT(INFO/STR_TAG)=2']);
 test_vcf_query($opts,in=>'query',out=>'query.75.out',args=>q[-f '%CHROM:%POS\\t%N_PASS(GT="alt" & GQ>110)\\t[\\t%GT]\\t[\\t%GQ]\n']);
+test_vcf_query($opts,in=>'query.filter.12',out=>'query.82.out',args=>q[-f '%CHROM:%POS[\\t%SAMPLE=%GT]\\n' -e 'GT="mis"' -s 1,3,0]);
+test_vcf_query($opts,in=>'query.filter.12',out=>'query.83.out',args=>q[-f '%CHROM:%POS[\\t%SAMPLE=%GT]\\n' -e 'GT="mis"' -s 0,1,3]);
 test_vcf_norm($opts,in=>'norm',out=>'norm.out',fai=>'norm',args=>'-cx');
 test_vcf_norm($opts,in=>'norm.split',out=>'norm.split.out',args=>'-m-');
 test_vcf_norm($opts,in=>'norm.split.2',out=>'norm.split.2.out',args=>'-m-');
@@ -266,6 +268,8 @@ test_vcf_view($opts,in=>'idx.2',out=>'idx.2.out',args=>q[-H -r 1:1172777-1172804
 test_vcf_view($opts,in=>'idx.2',out=>'idx.2.out',args=>q[-H -R {PATH}/idx.2.bed]);
 test_vcf_view($opts,in=>'idx.3',out=>'idx.3.out',args=>q[-H -R {PATH}/idx.3.bed]);
 test_vcf_view($opts,in=>'idx.4',out=>'idx.4.out',args=>q[-H -R {PATH}/idx.4.bed]);
+test_vcf_view($opts,in=>'view-t',out=>'view-t.1.out',args=>'-Ht 2',reg=>'');
+test_vcf_view($opts,in=>'view-t',out=>'view-t.2.out',args=>'-Ht 3',reg=>'');
 test_vcf_64bit($opts,in=>'view64bit.1',out=>'view64bit.1.out',do_bcf=>1);
 test_vcf_64bit($opts,in=>'view64bit.2',out=>'view64bit.2.out',do_bcf=>1);
 test_vcf_64bit($opts,in=>'view64bit.3',out=>'view64bit.3.out');     # large coordinates don't work with BCF
@@ -665,6 +669,8 @@ test_mpileup($opts,in=>[qw(mpileup.3 mpileup.4)],out=>'mpileup/mpileup.11.out',a
 test_mpileup($opts,in=>[qw(indel-AD.1)],out=>'mpileup/indel-AD.1.out',ref=>'indel-AD.1.fa',args=>q[-a AD]);
 test_mpileup($opts,in=>[qw(mpileup-SCR)],out=>'mpileup/mpileup-SCR.out',ref=>'mpileup-SCR.fa',args=>q[-a INFO/SCR,FMT/SCR]);
 test_csq($opts,in=>'csq',out=>'csq.1.out',cmd=>'-f {PATH}/csq.fa -g {PATH}/csq.gff3');
+test_csq($opts,in=>'csq.2',out=>'csq.2.out',cmd=>'-f {PATH}/csq.fa -g {PATH}/csq.2.gff',tbcsq=>1);
+test_csq($opts,in=>'csq.2',out=>'csq.3.out',cmd=>'-f {PATH}/csq.fa -g {PATH}/csq.2.gff --ncsq 64',tbcsq=>1);
 test_csq_real($opts,in=>'csq');
 test_roh($opts,in=>'roh.1',out=>'roh.1.1.out',args=>q[-Or -G30 --AF-dflt 0.4]);
 test_roh($opts,in=>'roh.1',out=>'roh.1.1.out',args=>q[-Or -G30 --AF-file {PATH}/roh.1.tab.gz]);
@@ -906,8 +912,7 @@ sub test_cmd
                 print $fh $exp;
                 close($fh);
             }
-            my @diff = `diff $$opts{path}/$args{out} $$opts{path}/$args{out}.new | head -20`;
-            if ( @diff==20 ) { push @diff,"etc.\n"; }
+            my @diff = `diff $$opts{path}/$args{out} $$opts{path}/$args{out}.new`;
             for (my $i=0; $i<@diff; $i++) { $diff[$i] = "\t\t\t".$diff[$i]; }
             chomp($diff[-1]);
             failed($opts,$test,"The outputs differ:\n\t\t$$opts{path}/$args{out}\n\t\t$$opts{path}/$args{out}.new$err\n".join('',@diff));
@@ -1598,7 +1603,14 @@ sub test_csq
 {
     my ($opts,%args) = @_;
     $args{cmd}  =~ s/{PATH}/$$opts{path}/g;
-    test_cmd($opts,%args,cmd=>"$$opts{bin}/bcftools csq $args{cmd} $$opts{path}/$args{in}.vcf | $$opts{bin}/test/csq/sort-csq | $$opts{bin}/bcftools query -f'%POS\\t%REF\\t%ALT\\t%EXP\\n%POS\\t%REF\\t%ALT\\t%BCSQ\\n\\n'");
+    if ( $args{tbcsq} )
+    {
+        test_cmd($opts,%args,cmd=>"$$opts{bin}/bcftools csq $args{cmd} $$opts{path}/$args{in}.vcf | $$opts{bin}/bcftools query -f'[%TBCSQ\\n]' | perl -pe 's/[\\t,]/\\n/g' | sort");
+    }
+    else
+    {
+        test_cmd($opts,%args,cmd=>"$$opts{bin}/bcftools csq $args{cmd} $$opts{path}/$args{in}.vcf | $$opts{bin}/test/csq/sort-csq | $$opts{bin}/bcftools query -f'%POS\\t%REF\\t%ALT\\t%EXP\\n%POS\\t%REF\\t%ALT\\t%BCSQ\\n\\n'");
+    }
 }
 sub test_csq_real
 {

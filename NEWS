@@ -1,5 +1,8 @@
 ## Release a.b
 
+## Release 1.12 (17th March 2021)
+
+
 Changes affecting the whole of bcftools, or multiple commands:
 
 * The output file type is determined from the output file name suffix, where
@@ -11,7 +14,7 @@ Changes affecting the whole of bcftools, or multiple commands:
 * Fix N_PASS and F_PASS to behave according to expectation when reverse
   logic is used (#1397). This fix has the side effect of `query` (or
   programs like `+trio-stats`) behaving differently with these expressions,
-  operating now in site-oritented rather than sample-oriented mode. For
+  operating now in site-oriented rather than sample-oriented mode. For
   example, the new behavior could be:
     bcftools query -f'[%POS %SAMPLE %GT\n]' -i'N_PASS(GT="alt")==1'
         11	A	0/0
@@ -86,7 +89,7 @@ Changes affecting specific commands:
     - Any sensible Number=R,Type=Integer annotation can be used with -G,
       such as AD or QS
 
-    - Don't trim QUAL; although usefuleness of this change is questionable for
+    - Don't trim QUAL; although usefulness of this change is questionable for
       true probabilistic interpretation (such high precision is unrealistic),
       using QUAL as a score rather than probability is helpful and permits more
       fine-grained filtering
@@ -100,6 +103,11 @@ Changes affecting specific commands:
 
     - Fix a bug wich caused incorrect FORMAT/BCSQ formatting at sites with too 
       many per-sample consequences
+
+    - Fix a bug which incorrectly handled the --ncsq parameter and could clash
+      with reserved BCF values, consequently producing truncated or even incorrect
+      output of the %TBCSQ formatting expression in `bcftools query`. To account
+      for the reserved values, the new default value is --ncsq 15 (#1428)
 
 * bcftools +fill-tags:
 
@@ -133,6 +141,12 @@ Changes affecting specific commands:
       for example MNVs into consecutive SNVs
 
     - New option `--old-rec-tag` to indicate the original variant
+
+* bcftools query:
+
+    - Incorrect fields were printed in the per-sample output when subset
+      of samples was requested via -s/-S and the order of samples in the
+      header was different from the requested -s/-S order (#1435)
 
 * bcftools +prune:
 
