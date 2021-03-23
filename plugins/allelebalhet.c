@@ -49,7 +49,9 @@ static args_t args;
 const char *about(void)
 {
     return
-        "Filter variant if extreme imbalance at het sites across samples.\n";
+        "Using the AD tag, computes the per-sample coverage of each allele at het sites.\n"
+        "Filters variants unless a minumum number of heterozygous samples have both: an allele balance within a specified threshold and a total allele depth above a given threshold. \n"
+        "Depth and allele balance threshold can spe specified separately for SNPs and INDELs. \n";
 }
 
 const char *usage(void)
@@ -99,7 +101,7 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
   };
   
   int c;
-  while ((c = getopt_long(argc, argv, "m:a:?h",loptions,NULL)) >= 0)    {
+  while ((c = getopt_long(argc, argv, "s:S:i:n:?h",loptions,NULL)) >= 0)    {
     switch (c) {
     case 's': args.min_het_covg_snp = atoi(optarg); break;
     case 'S': args.het_ab_thresh_snp = atof(optarg); break;
