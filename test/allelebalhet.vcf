@@ -1,0 +1,17 @@
+##fileformat=VCFv4.2
+##FILTER=<ID=PASS,Description="All filters passed">
+##FILTER=<ID=FAIL,Description="All filters did not pass">
+##reference=file://some/path/human_g1k_v37.fasta
+##contig=<ID=22,length=51304566>
+##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths">
+##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	NA12890	NA12891	NA12892
+22	16050159	.	C	T	68	FAIL	.	GT:AD	0/0:4,0	0/0:6,0	0/0:26,0
+22	16050252	.	A	T	85	FAIL	.	GT:AD	0/0:3,0	0/1:13,13	0/0:40,0
+22	16051249	.	T	C	32.1761	PASS	.	GT:AD	0/1:4,3	0/0:41,0	0/1:55,55
+22	16051347	.	G	C	283	PASS	.	GT:AD	1/1:2,4	0/1:20,20	0/1:43,43
+22	16051453	.	A	C	3.42882	FAIL	.	GT:AD	0/1:5,4	0/1:3,2	0/0:47,0
+22	16051454	.	A	C,T	3.42882	FAIL	.	GT:AD	0/1:5,4,4	1/2:39,1,9	0/0:47,0,0
+22	16051455	.	A	C,T	3.42882	PASS	.	GT:AD	0/1:12,1,0	0/2:39,0,39	0/2:47,0,46
+22	16051456	.	A	G,C	3.42882	PASS	.	GT:AD	1/2:0,4,4	1/2:0,9,9	0/0:47,0,0
+22	16051457	.	A	G,C	3.42882	FAIL	.	GT:AD	0/1:4,4,4	0/2:9,0,9	0/0:47,0,0

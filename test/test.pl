@@ -439,7 +439,7 @@ test_vcf_plugin($opts,in=>'plugin1',out=>'fill-AN-AC.out',cmd=>'+fill-AN-AC --no
 test_vcf_plugin($opts,in=>'dosage',out=>'dosage.1.out',cmd=>'+dosage',args=>'-- -t PL');
 test_vcf_plugin($opts,in=>'dosage',out=>'dosage.2.out',cmd=>'+dosage',args=>'-- -t GL');
 test_vcf_plugin($opts,in=>'dosage',out=>'dosage.3.out',cmd=>'+dosage',args=>'-- -t GT');
-test_vcf_plugin($opts,in=>'allelebalhet',out=>'allelebalhet.out',cmd=>'+allelebalhet',args=>'-- -s 7 -i 10 -S 0.15 -I 0.2');
+test_vcf_plugin($opts,in=>'allelebalhet',out=>'allelebalhet.out',cmd=>'+allelebalhet',args=>'-- -s 7 -i 10 -S 0.15 -I 0.2 --n_passing 2');
 test_vcf_plugin($opts,in=>'fixploidy',out=>'fixploidy.out',cmd=>'+fixploidy --no-version',args=>'-- -s {PATH}/fixploidy.samples -p {PATH}/fixploidy.ploidy');
 test_vcf_plugin($opts,in=>'view.PL',out=>'guess-ploidy.PL.out',cmd=>'+guess-ploidy',args=>'-vrX | grep -v bcftools');
 test_vcf_plugin($opts,in=>'view.GL',out=>'guess-ploidy.GL.out',cmd=>'+guess-ploidy',args=>'-vrX | grep -v bcftools');

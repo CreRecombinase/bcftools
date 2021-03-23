@@ -40,6 +40,7 @@ typedef struct _args_t
   float het_ab_thresh_indel;   /*! threshold for heterozygous allele balance filter for INDELs*/
   uint32_t min_het_covg_snp; /*! minimum coverage of heterozygous sites across samples before applying filter */
   uint32_t min_het_covg_indel; /*! minimum coverage of heterozygous sites across samples before applying filter */
+  uint32_t min_n_sample;       /*! Number of (het) samples that have to pass the allele balance test*/
   kbitset_t *rm_als;     /*! bitset for keeping track of which alleles to keep and drop */
 } args_t;
 
@@ -55,22 +56,23 @@ const char *usage(void)
 {
     return
         "\n"
-        "About:   Using the AD tag, computes the coverage of each allele at het sites across all samples.\n"
-        "         Filters variant if there is extreme imbalance between alleles. Only applies filter \n"
-        "         if het sites have a minimum total cross sample coverage. \n"      
+        "About:   Using the AD tag, computes the per-sample coverage of each allele at het sites.\n"
+        "         Filters variants unless a minumum number of heterozygous samples have both: an allele balance within a specified threshold and a total allele depth above a given threshold. \n"
+        "         Depth and allele balance threshold can spe specified separately for SNPs and INDELs. \n"      
         "Usage:   bcftools +allelebalhet <multisample.bcf/.vcf.gz> [General Options] -- [Plugin Options] \n"
         "\n"
         "Options:\n"
         "   run \"bcftools plugin\" for a list of common options\n"
         "\n"
         "Plugin options:\n"
-        "  -s,--mindepth_snp <integer>  min depth of coverage for het sites across samples for SNPs\n"
-        "  -i,--mindepth_indel <integer>  min depth of coverage for het sites across samples for INDELs\n"
+        "  -s,--mindepth_snp <integer>  min depth of total coverage for het sites across samples for SNPs\n"
+        "  -i,--mindepth_indel <integer>  min depth of total coverage for het sites across samples for INDELs\n"
         "  -S,--ab_snp <float>   allele balance threshold for SNPs.  A SNP site must have at least one sample with an allele balance between ab_snp and (1-ab_snp) otherwise the site is excluded\n"
         "  -I,--ab_indel <float>   allele balance threshold for SNPs.  A SNP site must have at least one sample with an allele balance between ab_snp and (1-ab_snp) otherwise the site is excluded\n"
+        "  -n,--n_passing <integer>  minimum number of samples that have to pass both the allele balance and allele depth test for the allele to be included (default 1)\n"
         "\n"
         "Example:\n"
-        "   bcftools plugin +allelebalhet in.vcf -o out.vcf -- -s 7 -i 10 -S 0.15 -I 0.2 \n"
+        "   bcftools plugin +allelebalhet in.vcf -o out.vcf -- -s 7 -i 10 -S 0.15 -I 0.2 -n 2\n"
         "\n";
 }
 
@@ -85,12 +87,14 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
   args.het_ab_thresh_indel = 0.2;
   args.min_het_covg_snp = 7;
   args.min_het_covg_indel = 10;
+  args.min_n_sample = 1;
 
   static struct option loptions[] =  {
       {"mindepth_snp",1,0,'s'},
       {"mindepth_indel",1,0,'i'},
       {"ab_snp",1,0,'S'},
       {"ab_indel",1,0,'I'},      
+      {"n_passing",1,0,'n'},      
       {0,0,0,0}
   };
   
@@ -100,11 +104,13 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
     case 's': args.min_het_covg_snp = atoi(optarg); break;
     case 'S': args.het_ab_thresh_snp = atof(optarg); break;
     case 'i': args.min_het_covg_indel = atoi(optarg); break;
+    case 'n': args.min_n_sample = atoi(optarg); break;
     case 'I': args.het_ab_thresh_indel = atof(optarg); break;      
     case 'h': case '?':
     default: fprintf(stderr,"%s", usage()); exit(1); break;
     }
   }
+  //TODO ensure that min_n_sample is <= the number of total samples
   args.het_ab_thresh_snp = fmax(args.het_ab_thresh_snp,1-args.het_ab_thresh_snp);
   args.het_ab_thresh_indel = fmax(args.het_ab_thresh_snp,1-args.het_ab_thresh_indel);
   args.hdr = bcf_hdr_dup(in);  
@@ -152,7 +158,11 @@ Anything that's left after looping over all the samples gets removed
   else if ( args.rm_als->n_max < rec->n_allele )
     kbs_resize(&args.rm_als, rec->n_allele);
   kbs_insert_all(args.rm_als);
-  
+
+// Start a counter at 0 for each allele;
+uint32_t allele_counter[rec->n_allele];
+memset(allele_counter,0,sizeof(uint32_t)*rec->n_allele);
+
 
  bcf_fmt_t *gt_fmt_ptr;
  if ( !(gt_fmt_ptr = bcf_get_fmt(args.hdr,rec,"GT")) )
@@ -174,9 +184,28 @@ Anything that's left after looping over all the samples gets removed
     const int32_t min_depth = is_indel ? args.min_het_covg_indel : args.min_het_covg_snp;
 
     if(allele_passes_balance_threshold(rec,ad_fmt_ptr,i,ial,jal,ab_thresh,min_depth)){
-      any_passed=true;
-      kbs_delete((args.rm_als),ial);
-      kbs_delete((args.rm_als),jal);
+      
+      allele_counter[ial]++;
+      allele_counter[jal]++;
+      //TODO figure out what to do if allele is balanced between two non-ref alleles
+      if(allele_counter[ial]>=args.min_n_sample){
+        if(ial>0)
+          any_passed=true;
+        kbs_delete((args.rm_als),ial);
+      }
+      if(allele_counter[jal]>=args.min_n_sample){
+        if(jal>0) 
+          any_passed=true;
+        kbs_delete((args.rm_als),jal);
+      }
+      
+      bool all_passed = true;
+      for(int k=0; k<rec->n_allele;k++){
+        all_passed = all_passed && allele_counter[k]>=args.min_n_sample;
+      }
+      if(all_passed){
+        return rec;
+      }
     }
   }
   if(!any_passed) return NULL;
