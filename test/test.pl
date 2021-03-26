@@ -443,7 +443,7 @@ test_vcf_plugin($opts,in=>'plugin1',out=>'fill-AN-AC.out',cmd=>'+fill-AN-AC --no
 test_vcf_plugin($opts,in=>'dosage',out=>'dosage.1.out',cmd=>'+dosage',args=>'-- -t PL');
 test_vcf_plugin($opts,in=>'dosage',out=>'dosage.2.out',cmd=>'+dosage',args=>'-- -t GL');
 test_vcf_plugin($opts,in=>'dosage',out=>'dosage.3.out',cmd=>'+dosage',args=>'-- -t GT');
-test_vcf_plugin($opts,in=>'allelebalhet',out=>'allelebalhet.out',cmd=>'+allelebalhet',args=>'-- -s 7 -i 10 -S 0.15 -I 0.2 --n_passing 2');
+test_vcf_plugin($opts,in=>'allelebalhet',out=>'allelebalhet_out.vcf',cmd=>'+allelebalhet',args=>'-- -s 7 -i 10 -S 0.15 -I 0.2 --n_passing 2');
 test_vcf_plugin($opts,in=>'fixploidy',out=>'fixploidy.out',cmd=>'+fixploidy --no-version',args=>'-- -s {PATH}/fixploidy.samples -p {PATH}/fixploidy.ploidy');
 test_vcf_plugin($opts,in=>'view.PL',out=>'guess-ploidy.PL.out',cmd=>'+guess-ploidy',args=>'-vrX | grep -v bcftools');
 test_vcf_plugin($opts,in=>'view.GL',out=>'guess-ploidy.GL.out',cmd=>'+guess-ploidy',args=>'-vrX | grep -v bcftools');
@@ -599,10 +599,10 @@ test_vcf_convert($opts,in=>'check',out=>'check.gs.vcfids_chrom.samples',args=>'-
 test_vcf_convert($opts,in=>'convert',out=>'convert.hls.haps',args=>'-h -,.,.');
 test_vcf_convert($opts,in=>'convert',out=>'convert.hls.legend',args=>'-h .,-,.');
 test_vcf_convert($opts,in=>'convert',out=>'convert.hls.samples',args=>'-h .,.,-');
-test_vcf_convert_hls2vcf($opts,h=>'convert.hls.gt.hap',l=>'convert.hls.gt.legend',s=>'convert.hls.gt.samples',out=>'convert.gt.noHead.vcf',args=>'-H');
-test_vcf_convert_hls2vcf($opts,h=>'convert.hls.gt.hap',l=>'convert.hls.gt.legend',s=>'convert.hls.gt.samples',out=>'convert.gt.noHead.ids.vcf',args=>'--vcf-ids -H');
-test_vcf_convert_hs2vcf($opts,h=>'convert.hs.gt.hap',s=>'convert.hs.gt.samples',out=>'convert.gt.noHead.vcf',args=>'--hapsample2vcf');
-test_vcf_convert_hs2vcf($opts,h=>'convert.hs.gt.hap',s=>'convert.hs.gt.samples',out=>'convert.gt.noHead.ids.vcf',args=>'--vcf-ids --hapsample2vcf');
+test_vcf_convert_hls2vcf($opts,h=>'convert.hls.gt.hap',l=>'convert.hls.gt.legend','s','convert.hls.gt.samples',out=>'convert.gt.noHead.vcf',args=>'-H');
+test_vcf_convert_hls2vcf($opts,h=>'convert.hls.gt.hap',l=>'convert.hls.gt.legend','s','convert.hls.gt.samples',out=>'convert.gt.noHead.ids.vcf',args=>'--vcf-ids -H');
+test_vcf_convert_hs2vcf($opts,h=>'convert.hs.gt.hap','s','convert.hs.gt.samples',out=>'convert.gt.noHead.vcf',args=>'--hapsample2vcf');
+test_vcf_convert_hs2vcf($opts,h=>'convert.hs.gt.hap','s','convert.hs.gt.samples',out=>'convert.gt.noHead.ids.vcf',args=>'--vcf-ids --hapsample2vcf');
 test_vcf_convert($opts,in=>'convert',out=>'convert.hs.hap',args=>'--hapsample -,.');
 test_vcf_convert($opts,in=>'convert',out=>'convert.hs.sample',args=>'--hapsample .,-');
 test_vcf_convert($opts,in=>'convert.hap-missing',out=>'convert.hap-missing.haps',args=>'--haplegendsample -,.,.');
