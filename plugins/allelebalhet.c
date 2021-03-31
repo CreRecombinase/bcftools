@@ -59,7 +59,8 @@ const char *usage(void)
 {
     return
         "\n"
-        "About:   Using the AD tag, computes the per-sample coverage of each allele at het sites.\n"
+        "About:   Using the AD tag, this plugin computes the per-sample read depth at het sites, \n"
+                  "as well as the proportion of reads that come from each non-ref allele.\n"
         "         Filters variants unless a minumum number of heterozygous samples have both: an allele balance within a specified threshold and a total allele depth above a given threshold. \n"
         "         Depth and allele balance threshold can be specified separately for SNPs and INDELs. \n"      
         "Usage:   bcftools +allelebalhet <multisample.bcf/.vcf.gz> [General Options] -- [Plugin Options] \n"
@@ -398,12 +399,6 @@ int bcf_remove_allele_set_2(const bcf_hdr_t *header, bcf1_t *line, const struct 
                     if ( bcf_gt_is_missing(ptr[j]) ) continue;
                     if ( ptr[j]==bcf_int32_vector_end ) break;
                     int al = bcf_gt_allele(ptr[j]);
-                    //if ( !( al<nR_ori && map[al]>=0 ) )
-                    //{
-                    //   hts_log_error("Problem updating genotypes at %s:%"PRIhts_pos" [ al<nR_ori && map[al]>=0 :: al=%d,nR_ori=%d,map[al]=%d ]",
-                    //        bcf_seqname_safe(header,line), line->pos+1, al, nR_ori, map[al]);
-                    //    goto err;
-                    //}
                     ptr[j] = (map[al]+1)<<1 | (ptr[j]&1);
                 }
                 ptr += nret;
