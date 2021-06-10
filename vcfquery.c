@@ -186,11 +186,13 @@ static void list_columns(args_t *args)
     }
 
     int i;
-    bcf_sr_t *reader = &args->files->readers[0];
-    for (i=0; i<bcf_hdr_nsamples(reader->header); i++)
-    {
-        if ( has_sample && !khash_str2int_has_key(has_sample, reader->header->samples[i]) ) continue;
-        printf("%s\n", reader->header->samples[i]);
+    for(int j=0; j<args->files->nreaders; j++){
+        bcf_sr_t *reader = &args->files->readers[j];
+        for (i=0; i<bcf_hdr_nsamples(reader->header); i++)
+        {
+            if ( has_sample && !khash_str2int_has_key(has_sample, reader->header->samples[i]) ) continue;
+            printf("%s\n", reader->header->samples[i]);
+        }
     }
 
     if ( has_sample )
@@ -326,15 +328,37 @@ int main_vcfquery(int argc, char *argv[])
 
     if ( args->list_columns )
     {
-        if ( !fname ) error("Missing the VCF file name\n");
         args->files = bcf_sr_init();
-        if ( !bcf_sr_add_reader(args->files, fname) ) error("Failed to read from %s: %s\n", !strcmp("-",fname)?"standard input":fname,bcf_sr_strerror(args->files->errnum));
-        list_columns(args);
-        bcf_sr_destroy(args->files);
+        if ( !args->vcf_list )
+        {
+            if (!fname)
+                error("Missing the VCF file name\n");
+            if (!bcf_sr_add_reader(args->files, fname))
+                error("Failed to read from %s: %s\n", !strcmp("-", fname) ? "standard input" : fname, bcf_sr_strerror(args->files->errnum));
+            list_columns(args);
+            bcf_sr_destroy(args->files);
+            
+            return 0;
+        }
+        int nfiles= 0;
+        char **fnames = NULL;
+        fnames = hts_readlist(args->vcf_list, 1, &nfiles);
+        if ( !nfiles ) error("No files in %s?\n", args->vcf_list);
+        bcf_sr_set_opt(args->files,BCF_SR_ALLOW_NO_IDX);
+        
+        for (int i=0; i<nfiles; i++)
+        {   
+            args->files = bcf_sr_init();
+            if (!bcf_sr_add_reader(args->files, fnames[i])){
+              error("Failed to read from %s: %s\n", !strcmp("-", fname) ? "standard input" : fname, bcf_sr_strerror(args->files->errnum));
+            }                
+            list_columns(args);
+            bcf_sr_destroy(args->files);
+        }
         free(args);
+        destroy_list(fnames, nfiles);
         return 0;
     }
-
     if ( !args->format_str )
     {
         if ( argc==1 && !fname ) usage();
