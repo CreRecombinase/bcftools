@@ -1,6 +1,6 @@
 # Makefile for bcftools, utilities for Variant Call Format VCF/BCF files.
 #
-#   Copyright (C) 2012-2017 Genome Research Ltd.
+#   Copyright (C) 2012-2021 Genome Research Ltd.
 #
 #   Author: Petr Danecek <pd3@sanger.ac.uk>
 #
@@ -104,7 +104,7 @@ endif
 
 include config.mk
 
-PACKAGE_VERSION = 1.12
+PACKAGE_VERSION = 1.13
 
 # If building from a Git repository, replace $(PACKAGE_VERSION) with the Git
 # description of the working tree: either a release tag with the same value

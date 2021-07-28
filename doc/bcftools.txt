@@ -1147,10 +1147,11 @@ output VCF and are ignored for the prediction analysis.
 *-c, --custom-tag* 'STRING'::
     use this custom tag to store consequences rather than the default BCSQ tag
 
-*-b, --brief-predictions*::
-    annotate with abbreviated protein-changing predictions. That is, instead of writing
-    the whole modified protein sequence with potentially hundreds of aminoacids, only an
-    abbreviated version such as '25E..329>25G..94' will be written
+*-B, --trim-protein-seq* 'INT'::
+    abbreviate protein-changing predictions to maximum of INT aminoacids.
+    For example, instead of writing the whole modified protein sequence with potentially hundreds of
+    aminoacids, with *-B 1* only an abbreviated version such as '25E..329>25G..94' will be
+    written.
 
 *-e, --exclude* 'EXPRESSION'::
     exclude sites for which 'EXPRESSION' is true. For valid expressions see
@@ -1973,6 +1974,14 @@ INFO/DPR    .. Deprecated in favor of INFO/AD; Number of high-quality bases for 
         illumina       [ default values ]
         ont	           -B -Q5 --max-BQ 30 -I
         pacbio-ccs     -D -Q5 --max-BQ 50 -F0.1 -o25 -e1 -M99999
+
+*--ar, --ambig-reads* 'drop'|'incAD'|'incAD0'::
+    What to do with ambiguous indel reads that do not span an entire
+    short tandem repeat region: discard ambiguous reads from calling
+    and do not increment high-quality AD depth counters ('drop'),
+    exclude from calling but increment AD counters proportionally ('incAD'),
+    exclude from calling and increment the first value of the AD counter
+    ('incAD0') ['drop']
 
 *-e, --ext-prob* 'INT'::
     Phred-scaled gap extension sequencing error probability. Reducing 'INT'
