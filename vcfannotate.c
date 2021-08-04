@@ -208,6 +208,8 @@ void remove_info(args_t *args, bcf1_t *line, rm_tag_t *tag)
     for (i=0; i<line->n_info; i++)
     {
         bcf_info_t *inf = &line->d.info[i];
+        if (  !strcmp("END",bcf_hdr_int2id(args->hdr,BCF_DT_ID,inf->key)) )
+            line->rlen = line->n_allele ? strlen(line->d.allele[0]) : 0;
         if ( inf->vptr_free )
         {
             free(inf->vptr - inf->vptr_off);
@@ -2236,7 +2238,11 @@ static void init_columns(args_t *args)
                 col->replace = replace;
                 col->hdr_key_src = strdup(hrec->vals[k]);
                 col->hdr_key_dst = strdup(hrec->vals[k]);
-                if ( !strcasecmp("GT",col->hdr_key_src) ) col->setter = vcf_setter_format_gt;
+                if ( !strcasecmp("GT",col->hdr_key_src) )
+                {
+                    if ( !args->tgts_is_vcf ) error("The FORMAT/GT field can be currently populated only from a VCF\n");
+                    col->setter = vcf_setter_format_gt;
+                }
                 else
                     switch ( bcf_hdr_id2type(args->hdr_out,BCF_HL_FMT,hdr_id) )
                     {
@@ -2289,7 +2295,11 @@ static void init_columns(args_t *args)
             col->replace = replace;
             col->hdr_key_src = strdup(key_src);
             col->hdr_key_dst = strdup(key_dst);
-            if ( !strcasecmp("GT",key_src) ) col->setter = vcf_setter_format_gt;
+            if ( !strcasecmp("GT",key_src) )
+            {
+                if ( !args->tgts_is_vcf ) error("The FORMAT/GT field can be currently populated only from a VCF\n");
+                col->setter = vcf_setter_format_gt;
+            }
             else
                 switch ( bcf_hdr_id2type(args->hdr_out,BCF_HL_FMT,hdr_id) )
                 {

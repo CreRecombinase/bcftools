@@ -39,6 +39,7 @@ DEALINGS IN THE SOFTWARE.  */
 #include <htslib/faidx.h>
 #include <htslib/kstring.h>
 #include <htslib/khash_str2int.h>
+#include <htslib/hts_os.h>
 #include <assert.h>
 #include "regidx.h"
 #include "bcftools.h"
@@ -67,7 +68,7 @@ typedef struct _mplp_pileup_t mplp_pileup_t;
 // Data shared by all bam files
 typedef struct {
     int min_mq, flag, min_baseQ, max_baseQ, delta_baseQ, capQ_thres, max_depth,
-        max_indel_depth, max_read_len, fmt_flag;
+        max_indel_depth, max_read_len, fmt_flag, ambig_reads;
     int rflag_require, rflag_filter, output_type;
     int openQ, extQ, tandemQ, min_support; // for indels
     double min_frac; // for indels
@@ -841,6 +842,7 @@ static int mpileup(mplp_conf_t *conf)
     conf->bca->min_support = conf->min_support;
     conf->bca->per_sample_flt = conf->flag & MPLP_PER_SAMPLE;
     conf->bca->fmt_flag = conf->fmt_flag;
+    conf->bca->ambig_reads = conf->ambig_reads;
 
     conf->bc.bcf_hdr = conf->bcf_hdr;
     conf->bc.n  = nsmpl;
@@ -1126,6 +1128,7 @@ static void print_usage(FILE *fp, const mplp_conf_t *mplp)
         "  -t, --targets REG[,...] similar to -r but streams rather than index-jumps\n"
         "  -T, --targets-file FILE similar to -R but streams rather than index-jumps\n"
         "  -x, --ignore-overlaps   disable read-pair overlap detection\n"
+        "      --seed INT          random number seed used for sampling deep regions [0]\n"
         "\n"
         "Output options:\n"
         "  -a, --annotate LIST     optional tags to output; '?' to list available tags []\n"
@@ -1156,13 +1159,14 @@ static void print_usage(FILE *fp, const mplp_conf_t *mplp)
         "  -o, --open-prob INT     Phred-scaled gap open seq error probability [%d]\n", mplp->openQ);
     fprintf(fp,
         "  -p, --per-sample-mF     apply -m and -F per-sample for increased sensitivity\n"
-        "  -P, --platforms STR     comma separated list of platforms for indels [all]\n");
+        "  -P, --platforms STR     comma separated list of platforms for indels [all]\n"
+        "  --ar, --ambig-reads STR   What to do with ambiguous indel reads: drop,incAD,incAD0 [drop]\n");
     fprintf(fp,
-        "      --indel-bias FLOAT  Raise to favour recall over precision [%.2f]\n"
-        "\n", mplp->indel_bias);
+        "      --indel-bias FLOAT  Raise to favour recall over precision [%.2f]\n", mplp->indel_bias);
+    fprintf(fp,"\n");
     fprintf(fp,
         "Configuration profiles activated with -X, --config:\n"
-        "    1.12:        -Q13 -h100 -m1\n"
+        "    1.12:        -Q13 -h100 -m1 -F0.002\n"
         "    illumina:    [ default values ]\n"
         "    ont:         -B -Q5 --max-BQ 30 -I [also try eg |bcftools call -P0.01]\n"
         "    pacbio-ccs:  -D -Q5 --max-BQ 50 -F0.1 -o25 -e1 --delta-BQ 10 -M99999\n"
@@ -1205,6 +1209,8 @@ int main_mpileup(int argc, char *argv[])
     // the default to be changed in future, see also parse_format_flag()
     mplp.fmt_flag = B2B_INFO_VDB|B2B_INFO_RPB|B2B_INFO_SCB|B2B_INFO_ZSCORE;
     mplp.max_read_len = 500;
+    mplp.ambig_reads = B2B_DROP;
+    hts_srand48(0);
 
     static const struct option lopts[] =
     {
@@ -1264,6 +1270,9 @@ int main_mpileup(int argc, char *argv[])
         {"max-read-len", required_argument, NULL, 'M'},
         {"config", required_argument, NULL, 'X'},
         {"mwu-u", no_argument, NULL, 'U'},
+        {"seed", required_argument, NULL, 13},
+        {"ambig-reads", required_argument, NULL, 14},
+        {"ar", required_argument, NULL, 14},
         {NULL, 0, NULL, 0}
     };
     while ((c = getopt_long(argc, argv, "Ag:f:r:R:q:Q:C:BDd:L:b:P:po:e:h:Im:F:EG:6O:xa:s:S:t:T:M:X:U",lopts,NULL)) >= 0) {
@@ -1388,7 +1397,7 @@ int main_mpileup(int argc, char *argv[])
                 mplp.flag |= MPLP_NO_INDEL;
             } else if (strcasecmp(optarg, "1.12") == 0) {
                 // 1.12 and earlier
-                mplp.min_frac = 0.05;
+                mplp.min_frac = 0.002;
                 mplp.min_support = 1;
                 mplp.min_baseQ = 13;
                 mplp.tandemQ = 100;
@@ -1402,6 +1411,13 @@ int main_mpileup(int argc, char *argv[])
                         optarg);
                 return 1;
             }
+            break;
+        case 13: hts_srand48(atoi(optarg)); break;
+        case 14:
+            if ( !strcasecmp(optarg,"drop") ) mplp.ambig_reads = B2B_DROP;
+            else if ( !strcasecmp(optarg,"incAD") ) mplp.ambig_reads = B2B_INC_AD;
+            else if ( !strcasecmp(optarg,"incAD0") ) mplp.ambig_reads = B2B_INC_AD0;
+            else error("The option to --ambig-reads not recognised: %s\n",optarg);
             break;
         default:
             fprintf(stderr,"Invalid option: '%c'\n", c);

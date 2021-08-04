@@ -1,7 +1,7 @@
 /*  bam2bcf.c -- variant calling.
 
     Copyright (C) 2010-2012 Broad Institute.
-    Copyright (C) 2012-2020 Genome Research Ltd.
+    Copyright (C) 2012-2021 Genome Research Ltd.
 
     Author: Heng Li <lh3@sanger.ac.uk>
 
@@ -205,9 +205,12 @@ int bcf_call_glfgen(int _n, const bam_pileup1_t *pl, int ref_base, bcf_callaux_t
 
     // fill the bases array
     double nqual_over_60 = bca->nqual / 60.0;
+    int ADR_ref_missed[4] = {0};
+    int ADF_ref_missed[4] = {0};
     for (i = n = 0; i < _n; ++i) {
         const bam_pileup1_t *p = pl + i;
         int q, b, mapQ, baseQ, is_diff, min_dist, seqQ;
+        if ( bca->fmt_flag&(B2B_INFO_SCR|B2B_FMT_SCR) && PLP_HAS_SOFT_CLIP(p->cd.i) ) r->SCR++;
         if (p->is_refskip || (p->b->core.flag&BAM_FUNMAP)) continue;
         if (p->is_del && !is_indel) continue;
         ++ori_depth;
@@ -215,7 +218,17 @@ int bcf_call_glfgen(int _n, const bam_pileup1_t *pl, int ref_base, bcf_callaux_t
         {
             b = p->aux>>16&0x3f;
             seqQ = q = (p->aux & 0xff); // mp2 + builtin indel-bias
-            if (q < bca->min_baseQ) continue;
+            if (q < bca->min_baseQ)
+            {
+                if (!p->indel && b < 4)
+                {
+                    if (bam_is_rev(p->b))
+                        ADR_ref_missed[b]++;
+                    else
+                        ADF_ref_missed[b]++;
+                }
+                continue;
+            }
             if (p->indel == 0 && (q < _n/2 || _n > 20)) {
                 // high quality indel calls without p->indel set aren't
                 // particularly indicative of being a good REF match either,
@@ -259,7 +272,6 @@ int bcf_call_glfgen(int _n, const bam_pileup1_t *pl, int ref_base, bcf_callaux_t
         if (q > 63) q = 63;
         if (q < 4) q = 4;       // MQ=0 reads count as BQ=4
         bca->bases[n++] = q<<5 | (int)bam_is_rev(p->b)<<4 | b;
-        if ( bca->fmt_flag&(B2B_INFO_SCR|B2B_FMT_SCR) && PLP_HAS_SOFT_CLIP(p->cd.i) ) r->SCR++;
         // collect annotations
         if (b < 4)
         {
@@ -321,6 +333,30 @@ int bcf_call_glfgen(int _n, const bam_pileup1_t *pl, int ref_base, bcf_callaux_t
             bca->alt_scl[sc_len]++;
         }
     }
+
+    // Compensate for AD not being counted on low quality REF indel matches.
+    if ( r->ADF && bca->ambig_reads==B2B_INC_AD0 )
+    {
+        for (i=0; i<4; i++)
+        {
+            r->ADR[0] += ADR_ref_missed[i];
+            r->ADF[0] += ADF_ref_missed[i];
+        }
+    }
+    else if ( r->ADF && bca->ambig_reads==B2B_INC_AD )
+    {
+        int dp = 0, dp_ambig = 0;
+        for (i=0; i<4; i++) dp += r->ADR[i];
+        for (i=0; i<4; i++) dp_ambig += ADR_ref_missed[i];
+        if ( dp )
+            for (i=0; i<4; i++) r->ADR[i] += lroundf((float)dp_ambig * r->ADR[i]/dp);
+        dp = 0, dp_ambig = 0;
+        for (i=0; i<4; i++) dp += r->ADF[i];
+        for (i=0; i<4; i++) dp_ambig += ADF_ref_missed[i];
+        if ( dp )
+            for (i=0; i<4; i++) r->ADF[i] += lroundf((float)dp_ambig * r->ADF[i]/dp);
+    }
+
     r->ori_depth = ori_depth;
     // glfgen
     errmod_cal(bca->e, n, 5, bca->bases, r->p); // calculate PL of each genotype
