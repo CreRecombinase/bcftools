@@ -1,6 +1,6 @@
 /*  vcfquery.c -- Extracts fields from VCF/BCF file.
 
-    Copyright (C) 2013-2021 Genome Research Ltd.
+    Copyright (C) 2013-2022 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -37,6 +37,7 @@ THE SOFTWARE.  */
 #include "bcftools.h"
 #include "filter.h"
 #include "convert.h"
+#include "smpl_ilist.h"
 
 
 // Logic of the filters: include or exclude sites which match the filters?
@@ -52,9 +53,9 @@ typedef struct
     convert_t *convert;
     bcf_srs_t *files;
     bcf_hdr_t *header;
-    int nsamples, *samples, sample_is_file;
+    int sample_is_file;
     char **argv, *format_str, *sample_list, *targets_list, *regions_list, *vcf_list, *fn_out;
-    int argc, list_columns, print_header, allow_undef_tags;
+    int argc, list_columns, print_header, allow_undef_tags, force_samples;
     FILE *out;
 }
 args_t;
@@ -76,28 +77,21 @@ static void init_data(args_t *args)
     {
         for (i=0; i<args->files->nreaders; i++)
         {
+            // This tells htslib to subset samples directly when reading. Also the header is modified to
+            // include only the requested samples
             int ret = bcf_hdr_set_samples(args->files->readers[i].header,args->sample_list,args->sample_is_file);
             if ( ret<0 ) error("Error parsing the sample list\n");
-            else if ( ret>0 ) error("Sample name mismatch: sample #%d not found in the header\n", ret);
+            else if ( ret>0 && !args->force_samples )
+                error("Error: sample #%d not found in the header, user --force-samples to proceed anyway\n", ret);
         }
 
-        if ( args->sample_list[0]!='^' )
-        {
-            // the sample ordering may be different if not negated
-            int n;
-            char **smpls = hts_readlist(args->sample_list, args->sample_is_file, &n);
-            if ( !smpls ) error("Could not parse %s\n", args->sample_list);
-            if ( n!=bcf_hdr_nsamples(args->files->readers[0].header) )
-                error("The number of samples does not match, perhaps some are present multiple times?\n");
-            nsamples = bcf_hdr_nsamples(args->files->readers[0].header);
-            samples = (int*) malloc(sizeof(int)*nsamples);
-            for (i=0; i<n; i++)
-            {
-                samples[i] = bcf_hdr_id2int(args->files->readers[0].header, BCF_DT_SAMPLE,smpls[i]);
-                free(smpls[i]);
-            }
-            free(smpls);
-        }
+        int flags = SMPL_REORDER;
+        smpl_ilist_t *ilist = smpl_ilist_init(args->files->readers[0].header, args->sample_list, args->sample_is_file, flags);
+        nsamples = ilist->n;
+        samples = (int*) malloc(sizeof(int)*nsamples);
+        for (i=0; i<ilist->n; i++)
+            samples[i] = ilist->idx[i];
+        smpl_ilist_destroy(ilist);
     }
     args->convert = convert_init(args->header, samples, nsamples, args->format_str);
     convert_set_option(args->convert, subset_samples, &args->smpl_pass);
@@ -118,7 +112,6 @@ static void destroy_data(args_t *args)
     convert_destroy(args->convert);
     if ( args->filter )
         filter_destroy(args->filter);
-    free(args->samples);
 }
 
 static void query_vcf(args_t *args)
@@ -175,21 +168,35 @@ static void query_vcf(args_t *args)
 
 static void list_columns(args_t *args)
 {
+    int negate = 0;
+    int i;
+    bcf_sr_t *reader = &args->files->readers[0];
     void *has_sample = NULL;
     if ( args->sample_list )
     {
+        if ( args->sample_list[0]=='^' ) negate = 1;
         has_sample = khash_str2int_init();
         int i, nsmpl;
-        char **smpl = hts_readlist(args->sample_list, args->sample_is_file, &nsmpl);
-        for (i=0; i<nsmpl; i++) khash_str2int_inc(has_sample, smpl[i]);
+        char **smpl = hts_readlist(negate ? args->sample_list+1 : args->sample_list, args->sample_is_file, &nsmpl);
+        if ( !smpl ) error("Error: failed to read %s\n", negate ? args->sample_list+1 : args->sample_list);
+        for (i=0; i<nsmpl; i++)
+        {
+            if ( bcf_hdr_id2int(reader->header,BCF_DT_SAMPLE,smpl[i])<0 && !args->force_samples )
+                error("Error: sample #%d not found in the header, user --force-samples to proceed anyway\n", i+1);
+            khash_str2int_inc(has_sample, smpl[i]);
+        }
         free(smpl);
     }
 
-    int i;
-    bcf_sr_t *reader = &args->files->readers[0];
     for (i=0; i<bcf_hdr_nsamples(reader->header); i++)
     {
-        if ( has_sample && !khash_str2int_has_key(has_sample, reader->header->samples[i]) ) continue;
+        int skip = 0;
+        if ( negate )
+        {
+            if ( khash_str2int_has_key(has_sample, reader->header->samples[i]) ) skip = 1;
+        }
+        else if ( has_sample && !khash_str2int_has_key(has_sample, reader->header->samples[i]) ) skip = 1;
+        if ( skip ) continue;
         printf("%s\n", reader->header->samples[i]);
     }
 
@@ -221,20 +228,23 @@ static void usage(void)
     fprintf(stderr, "Usage:   bcftools query [options] <A.vcf.gz> [<B.vcf.gz> [...]]\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Options:\n");
-    fprintf(stderr, "    -e, --exclude <expr>              exclude sites for which the expression is true (see man page for details)\n");
-    fprintf(stderr, "    -f, --format <string>             see man page for details\n");
-    fprintf(stderr, "    -H, --print-header                print header\n");
-    fprintf(stderr, "    -i, --include <expr>              select sites for which the expression is true (see man page for details)\n");
-    fprintf(stderr, "    -l, --list-samples                print the list of samples and exit\n");
-    fprintf(stderr, "    -o, --output <file>               output file name [stdout]\n");
-    fprintf(stderr, "    -r, --regions <region>            restrict to comma-separated list of regions\n");
-    fprintf(stderr, "    -R, --regions-file <file>         restrict to regions listed in a file\n");
-    fprintf(stderr, "    -s, --samples <list>              list of samples to include\n");
-    fprintf(stderr, "    -S, --samples-file <file>         file of samples to include\n");
-    fprintf(stderr, "    -t, --targets <region>            similar to -r but streams rather than index-jumps\n");
-    fprintf(stderr, "    -T, --targets-file <file>         similar to -R but streams rather than index-jumps\n");
-    fprintf(stderr, "    -u, --allow-undef-tags            print \".\" for undefined tags\n");
-    fprintf(stderr, "    -v, --vcf-list <file>             process multiple VCFs listed in the file\n");
+    fprintf(stderr, "    -e, --exclude EXPR                Exclude sites for which the expression is true (see man page for details)\n");
+    fprintf(stderr, "        --force-samples               Only warn about unknown subset samples\n");
+    fprintf(stderr, "    -f, --format STRING               See man page for details\n");
+    fprintf(stderr, "    -H, --print-header                Print header\n");
+    fprintf(stderr, "    -i, --include EXPR                Select sites for which the expression is true (see man page for details)\n");
+    fprintf(stderr, "    -l, --list-samples                Print the list of samples and exit\n");
+    fprintf(stderr, "    -o, --output FILE                 Output file name [stdout]\n");
+    fprintf(stderr, "    -r, --regions REGION              Restrict to comma-separated list of regions\n");
+    fprintf(stderr, "    -R, --regions-file FILE           Restrict to regions listed in a file\n");
+    fprintf(stderr, "        --regions-overlap 0|1|2       Include if POS in the region (0), record overlaps (1), variant overlaps (2) [1]\n");
+    fprintf(stderr, "    -s, --samples LIST                List of samples to include\n");
+    fprintf(stderr, "    -S, --samples-file FILE           File of samples to include\n");
+    fprintf(stderr, "    -t, --targets REGION              Similar to -r but streams rather than index-jumps\n");
+    fprintf(stderr, "    -T, --targets-file FILE           Similar to -R but streams rather than index-jumps\n");
+    fprintf(stderr, "        --targets-overlap 0|1|2       Include if POS in the region (0), record overlaps (1), variant overlaps (2) [0]\n");
+    fprintf(stderr, "    -u, --allow-undef-tags            Print \".\" for undefined tags\n");
+    fprintf(stderr, "    -v, --vcf-list FILE               Process multiple VCFs listed in the file\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Examples:\n");
     fprintf(stderr, "\tbcftools query -f '%%CHROM\\t%%POS\\t%%REF\\t%%ALT[\\t%%SAMPLE=%%GT]\\n' file.vcf.gz\n");
@@ -248,6 +258,8 @@ int main_vcfquery(int argc, char *argv[])
     args_t *args = (args_t*) calloc(1,sizeof(args_t));
     args->argc   = argc; args->argv = argv;
     int regions_is_file = 0, targets_is_file = 0;
+    int regions_overlap = 1;
+    int targets_overlap = 0;
 
     static struct option loptions[] =
     {
@@ -256,12 +268,15 @@ int main_vcfquery(int argc, char *argv[])
         {"include",1,0,'i'},
         {"exclude",1,0,'e'},
         {"format",1,0,'f'},
+        {"force-samples",0,0,3},
         {"output-file",1,0,'o'},
         {"output",1,0,'o'},
         {"regions",1,0,'r'},
         {"regions-file",1,0,'R'},
+        {"regions-overlap",required_argument,NULL,1},
         {"targets",1,0,'t'},
         {"targets-file",1,0,'T'},
+        {"targets-overlap",required_argument,NULL,2},
         {"annots",1,0,'a'},
         {"samples",1,0,'s'},
         {"samples-file",1,0,'S'},
@@ -311,6 +326,15 @@ int main_vcfquery(int argc, char *argv[])
             case 'u': args->allow_undef_tags = 1; break;
             case 's': args->sample_list = optarg; break;
             case 'S': args->sample_list = optarg; args->sample_is_file = 1; break;
+            case  1 :
+                regions_overlap = parse_overlap_option(optarg);
+                if ( regions_overlap < 0 ) error("Could not parse: --regions-overlap %s\n",optarg);
+                break;
+            case  2 :
+                targets_overlap = parse_overlap_option(optarg);
+                if ( targets_overlap < 0 ) error("Could not parse: --targets-overlap %s\n",optarg);
+                break;
+            case  3 : args->force_samples = 1; break;
             case 'h':
             case '?': usage(); break;
             default: error("Unknown argument: %s\n", optarg);
@@ -348,10 +372,15 @@ int main_vcfquery(int argc, char *argv[])
         if ( !fname ) usage();
         args->files = bcf_sr_init();
         if ( optind+1 < argc ) args->files->require_index = 1;
-        if ( args->regions_list && bcf_sr_set_regions(args->files, args->regions_list, regions_is_file)<0 )
-            error("Failed to read the regions: %s\n", args->regions_list);
+        if ( args->regions_list )
+        {
+            bcf_sr_set_opt(args->files,BCF_SR_REGIONS_OVERLAP,regions_overlap);
+            if ( bcf_sr_set_regions(args->files, args->regions_list, regions_is_file)<0 )
+                error("Failed to read the regions: %s\n", args->regions_list);
+        }
         if ( args->targets_list )
         {
+            bcf_sr_set_opt(args->files,BCF_SR_TARGETS_OVERLAP,targets_overlap);
             if ( bcf_sr_set_targets(args->files, args->targets_list, targets_is_file, 0)<0 )
                 error("Failed to read the targets: %s\n", args->targets_list);
         }
@@ -374,6 +403,7 @@ int main_vcfquery(int argc, char *argv[])
     int i, k, nfiles, prev_nsamples = 0;
     char **fnames, **prev_samples = NULL;
     fnames = hts_readlist(args->vcf_list, 1, &nfiles);
+    if ( !fnames ) error("Error: failed to read %s\n", args->vcf_list);
     if ( !nfiles ) error("No files in %s?\n", args->vcf_list);
     for (i=0; i<nfiles; i++)
     {

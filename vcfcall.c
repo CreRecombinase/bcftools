@@ -1,6 +1,6 @@
 /*  vcfcall.c -- SNP/indel variant calling from VCF/BCF.
 
-    Copyright (C) 2013-2021 Genome Research Ltd.
+    Copyright (C) 2013-2022 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -74,13 +74,13 @@ rec_tgt_t;
 typedef struct
 {
     int flag;   // combination of CF_* flags above
-    int output_type, n_threads, record_cmd_line;
+    int output_type, n_threads, record_cmd_line, clevel;
     htsFile *bcf_in, *out_fh;
     char *bcf_fname, *output_fname;
     char **samples;             // for subsampling and ploidy
     int nsamples, *samples_map; // mapping from output sample names to original VCF
     char *regions, *targets;    // regions to process
-    int regions_is_file, targets_is_file;
+    int regions_is_file, targets_is_file, regions_overlap;
     regidx_t *tgt_idx;
     regitr_t *tgt_itr, *tgt_itr_prev, *tgt_itr_tmp;
     vcfbuf_t *vcfbuf;
@@ -229,9 +229,13 @@ static char **parse_ped_samples(call_t *call, char **vals, int nvals, int *nsmpl
             }
             tmp++;
         }
-        if ( j!=5 ) break;
+        if ( j<4 ) break;
 
-        char sex = col_ends[3][1]=='1' ? 'M' : 'F';
+        char sex;
+        if ( col_ends[3][1]=='1' ) sex = 'M';
+        else if ( col_ends[3][1]=='2' ) sex = 'F';
+        else break;
+
         lines = add_sample(name2idx, lines, &nlines, &mlines, col_ends[0]+1, sex, &j);
         if ( strcmp(col_ends[1]+1,"0") && strcmp(col_ends[2]+1,"0") )   // father and mother
         {
@@ -256,11 +260,8 @@ static char **parse_ped_samples(call_t *call, char **vals, int nvals, int *nsmpl
     free(fam_str.s);
     khash_str2int_destroy_free(name2idx);
 
-    if ( i!=nvals ) // not a ped file
-    {
-        if ( i>0 ) error("Could not parse samples, not a PED format.\n");
-        return NULL;
-    }
+    if ( i!=nvals ) return NULL; // not a ped file
+
     *nsmpl = nlines;
     return lines;
 }
@@ -287,6 +288,8 @@ static void set_samples(args_t *args, const char *fn, int is_file)
         lines = smpls;
         nlines = nsmpls;
     }
+    else if ( is_file )
+        fprintf(stderr,"Note: could not parse as PED: %s\n",fn);
 
     args->samples_map = (int*) malloc(sizeof(int)*bcf_hdr_nsamples(args->aux.hdr)); // for subsetting
     args->sample2sex  = (int*) malloc(sizeof(int)*bcf_hdr_nsamples(args->aux.hdr));
@@ -560,7 +563,7 @@ bcf1_t *next_line(args_t *args)
         return NULL;
     }
 
-    // Find the VCF and tab record with the best matching combination of alleles, prioritize 
+    // Find the VCF and tab record with the best matching combination of alleles, prioritize
     // records of the same type (snp vs indel)
     rec_tgt_t rec_tgt;
     memset(&rec_tgt,0,sizeof(rec_tgt));
@@ -624,6 +627,7 @@ static void init_data(args_t *args)
 
     if ( args->regions )
     {
+        bcf_sr_set_opt(args->aux.srs,BCF_SR_REGIONS_OVERLAP,args->regions_overlap);
         if ( bcf_sr_set_regions(args->aux.srs, args->regions, args->regions_is_file)<0 )
             error("Failed to read the regions: %s\n", args->regions);
     }
@@ -659,7 +663,7 @@ static void init_data(args_t *args)
         args->aux.ploidy = (uint8_t*) malloc(args->nsamples);
         for (i=0; i<args->nsamples; i++) args->aux.ploidy[i] = ploidy_max(args->ploidy);
         for (i=0; i<args->nsex; i++) args->sex2ploidy_prev[i] = ploidy_max(args->ploidy);
-        for (i=0; i<args->nsamples; i++) 
+        for (i=0; i<args->nsamples; i++)
             if ( args->sample2sex[i] >= args->nsex ) args->sample2sex[i] = args->nsex - 1;
     }
 
@@ -692,7 +696,9 @@ static void init_data(args_t *args)
     if ( args->aux.flag & CALL_CONSTR_ALLELES )
         args->vcfbuf = vcfbuf_init(args->aux.hdr, 0);
 
-    args->out_fh = hts_open(args->output_fname, hts_bcf_wmode2(args->output_type,args->output_fname));
+    char wmode[8];
+    set_wmode(wmode,args->output_type,args->output_fname,args->clevel);
+    args->out_fh = hts_open(args->output_fname ? args->output_fname : "-", wmode);
     if ( args->out_fh == NULL ) error("Error: cannot write to \"%s\": %s\n", args->output_fname, strerror(errno));
     if ( args->n_threads ) hts_set_threads(args->out_fh, args->n_threads);
 
@@ -876,42 +882,41 @@ static void usage(args_t *args)
     fprintf(stderr, "Usage:   bcftools call [options] <in.vcf.gz>\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "File format options:\n");
-    fprintf(stderr, "       --no-version              Do not append version and command line to the header\n");
-    fprintf(stderr, "   -o, --output FILE             Write output to a file [standard output]\n");
-    fprintf(stderr, "   -O, --output-type b|u|z|v     Output type: 'b' compressed BCF; 'u' uncompressed BCF; 'z' compressed VCF; 'v' uncompressed VCF [v]\n");
-    fprintf(stderr, "       --ploidy ASSEMBLY[?]      Predefined ploidy, 'list' to print available settings, append '?' for details [2]\n");
-    fprintf(stderr, "       --ploidy-file FILE        Space/tab-delimited list of CHROM,FROM,TO,SEX,PLOIDY\n");
-    fprintf(stderr, "   -r, --regions REGION          Restrict to comma-separated list of regions\n");
-    fprintf(stderr, "   -R, --regions-file FILE       Restrict to regions listed in a file\n");
-    fprintf(stderr, "   -s, --samples LIST            List of samples to include [all samples]\n");
-    fprintf(stderr, "   -S, --samples-file FILE       PED file or a file with an optional column with sex (see man page for details) [all samples]\n");
-    fprintf(stderr, "   -t, --targets REGION          Similar to -r but streams rather than index-jumps\n");
-    fprintf(stderr, "   -T, --targets-file FILE       Similar to -R but streams rather than index-jumps\n");
-    fprintf(stderr, "       --threads INT             Use multithreading with INT worker threads [0]\n");
+    fprintf(stderr, "       --no-version                Do not append version and command line to the header\n");
+    fprintf(stderr, "   -o, --output FILE               Write output to a file [standard output]\n");
+    fprintf(stderr, "   -O, --output-type b|u|z|v       Output type: 'b' compressed BCF; 'u' uncompressed BCF; 'z' compressed VCF; 'v' uncompressed VCF [v]\n");
+    fprintf(stderr, "   -O, --output-type u|b|v|z[0-9]  u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n");
+    fprintf(stderr, "       --ploidy ASSEMBLY[?]        Predefined ploidy, 'list' to print available settings, append '?' for details [2]\n");
+    fprintf(stderr, "       --ploidy-file FILE          Space/tab-delimited list of CHROM,FROM,TO,SEX,PLOIDY\n");
+    fprintf(stderr, "   -r, --regions REGION            Restrict to comma-separated list of regions\n");
+    fprintf(stderr, "   -R, --regions-file FILE         Restrict to regions listed in a file\n");
+    fprintf(stderr, "       --regions-overlap 0|1|2     Include if POS in the region (0), record overlaps (1), variant overlaps (2) [1]\n");
+    fprintf(stderr, "   -s, --samples LIST              List of samples to include [all samples]\n");
+    fprintf(stderr, "   -S, --samples-file FILE         PED file or a file with an optional column with sex (see man page for details) [all samples]\n");
+    fprintf(stderr, "   -t, --targets REGION            Similar to -r but streams rather than index-jumps\n");
+    fprintf(stderr, "   -T, --targets-file FILE         Similar to -R but streams rather than index-jumps\n");
+    fprintf(stderr, "       --threads INT               Use multithreading with INT worker threads [0]\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Input/output options:\n");
-    fprintf(stderr, "   -A, --keep-alts               Keep all possible alternate alleles at variant sites\n");
-    fprintf(stderr, "   -a, --annotate LIST           Optional tags to output (lowercase allowed); '?' to list available tags\n");
-//todo?    
-//    fprintf(stderr, "   -a, --annots LIST             Add annotations: GQ,GP,PV4 (lowercase allowed). Prefixed with ^ indicates a request for\n");
-//    fprintf(stderr, "                                 tag removal [^I16,^QS,^FMT/QS]\n");
-    fprintf(stderr, "   -F, --prior-freqs AN,AC       Use prior allele frequencies, determined from these pre-filled tags\n");
-    fprintf(stderr, "   -G, --group-samples FILE|-    Group samples by population (file with \"sample\\tgroup\") or \"-\" for single-sample calling.\n");
-    fprintf(stderr, "                                 This requires FORMAT/QS or other Number=R,Type=Integer tag such as FORMAT/AD\n"); 
-    fprintf(stderr, "       --group-samples-tag TAG   The tag to use with -G, by default FORMAT/QS and FORMAT/AD are checked automatically\n");
-    fprintf(stderr, "   -g, --gvcf INT,[...]          Group non-variant sites into gVCF blocks by minimum per-sample DP\n");
-    fprintf(stderr, "   -i, --insert-missed           Output also sites missed by mpileup but present in -T\n");
-    fprintf(stderr, "   -M, --keep-masked-ref         Keep sites with masked reference allele (REF=N)\n");
-    fprintf(stderr, "   -V, --skip-variants TYPE      Skip indels/snps\n");
-    fprintf(stderr, "   -v, --variants-only           Output variant sites only\n");
+    fprintf(stderr, "   -A, --keep-alts                 Keep all possible alternate alleles at variant sites\n");
+    fprintf(stderr, "   -a, --annotate LIST             Optional tags to output (lowercase allowed); '?' to list available tags\n");
+    fprintf(stderr, "   -F, --prior-freqs AN,AC         Use prior allele frequencies, determined from these pre-filled tags\n");
+    fprintf(stderr, "   -G, --group-samples FILE|-      Group samples by population (file with \"sample\\tgroup\") or \"-\" for single-sample calling.\n");
+    fprintf(stderr, "                                   This requires FORMAT/QS or other Number=R,Type=Integer tag such as FORMAT/AD\n");
+    fprintf(stderr, "       --group-samples-tag TAG     The tag to use with -G, by default FORMAT/QS and FORMAT/AD are checked automatically\n");
+    fprintf(stderr, "   -g, --gvcf INT,[...]            Group non-variant sites into gVCF blocks by minimum per-sample DP\n");
+    fprintf(stderr, "   -i, --insert-missed             Output also sites missed by mpileup but present in -T\n");
+    fprintf(stderr, "   -M, --keep-masked-ref           Keep sites with masked reference allele (REF=N)\n");
+    fprintf(stderr, "   -V, --skip-variants TYPE        Skip indels/snps\n");
+    fprintf(stderr, "   -v, --variants-only             Output variant sites only\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Consensus/variant calling options:\n");
-    fprintf(stderr, "   -c, --consensus-caller        The original calling method (conflicts with -m)\n");
-    fprintf(stderr, "   -C, --constrain STR           One of: alleles, trio (see manual)\n");
-    fprintf(stderr, "   -m, --multiallelic-caller     Alternative model for multiallelic and rare-variant calling (conflicts with -c)\n");
-    fprintf(stderr, "   -n, --novel-rate FLOAT,[...]  Likelihood of novel mutation for constrained trio calling, see man page for details [1e-8,1e-9,1e-9]\n");
-    fprintf(stderr, "   -p, --pval-threshold FLOAT    Variant if P(ref|D)<FLOAT with -c [0.5]\n");
-    fprintf(stderr, "   -P, --prior FLOAT             Mutation rate (use bigger for greater sensitivity), use with -m [1.1e-3]\n");
+    fprintf(stderr, "   -c, --consensus-caller          The original calling method (conflicts with -m)\n");
+    fprintf(stderr, "   -C, --constrain STR             One of: alleles, trio (see manual)\n");
+    fprintf(stderr, "   -m, --multiallelic-caller       Alternative model for multiallelic and rare-variant calling (conflicts with -c)\n");
+    fprintf(stderr, "   -n, --novel-rate FLOAT,[...]    Likelihood of novel mutation for constrained trio calling, see man page for details [1e-8,1e-9,1e-9]\n");
+    fprintf(stderr, "   -p, --pval-threshold FLOAT      Variant if P(ref|D)<FLOAT with -c [0.5]\n");
+    fprintf(stderr, "   -P, --prior FLOAT               Mutation rate (use bigger for greater sensitivity), use with -m [1.1e-3]\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Example:\n");
     fprintf(stderr, "   # See also http://samtools.github.io/bcftools/howtos/variant-calling.html\n");
@@ -946,6 +951,8 @@ int main_vcfcall(int argc, char *argv[])
     args.record_cmd_line = 1;
     args.aux.trio_Pm_SNPs = 1 - 1e-8;
     args.aux.trio_Pm_ins  = args.aux.trio_Pm_del  = 1 - 1e-9;
+    args.regions_overlap = 1;
+    args.clevel = -1;
 
     int c;
     static struct option loptions[] =
@@ -961,6 +968,7 @@ int main_vcfcall(int argc, char *argv[])
         {"output-type",required_argument,NULL,'O'},
         {"regions",required_argument,NULL,'r'},
         {"regions-file",required_argument,NULL,'R'},
+        {"regions-overlap",required_argument,NULL,4},
         {"samples",required_argument,NULL,'s'},
         {"samples-file",required_argument,NULL,'S'},
         {"targets",required_argument,NULL,'t'},
@@ -1015,7 +1023,7 @@ int main_vcfcall(int argc, char *argv[])
                 *args.aux.prior_AC = 0;
                 args.aux.prior_AC++;
                 break;
-            case 'g': 
+            case 'g':
                 args.gvcf = gvcf_init(optarg);
                 if ( !args.gvcf ) error("Could not parse: --gvcf %s\n", optarg);
                 break;
@@ -1026,7 +1034,16 @@ int main_vcfcall(int argc, char *argv[])
                           case 'u': args.output_type = FT_BCF; break;
                           case 'z': args.output_type = FT_VCF_GZ; break;
                           case 'v': args.output_type = FT_VCF; break;
-                          default: error("The output type \"%s\" not recognised\n", optarg);
+                          default:
+                          {
+                              args.clevel = strtol(optarg,&tmp,10);
+                              if ( *tmp || args.clevel<0 || args.clevel>9 ) error("The output type \"%s\" not recognised\n", optarg);
+                          }
+                      }
+                      if ( optarg[1] )
+                      {
+                          args.clevel = strtol(optarg+1,&tmp,10);
+                          if ( *tmp || args.clevel<0 || args.clevel>9 ) error("Could not parse argument: --compression-level %s\n", optarg+1);
                       }
                       break;
             case 'C':
@@ -1056,6 +1073,10 @@ int main_vcfcall(int argc, char *argv[])
             case 'S': args.samples_fname = optarg; args.samples_is_file = 1; break;
             case  9 : args.n_threads = strtol(optarg, 0, 0); break;
             case  8 : args.record_cmd_line = 0; break;
+            case  4 :
+                args.regions_overlap = parse_overlap_option(optarg);
+                if ( args.regions_overlap < 0 ) error("Could not parse: --regions-overlap %s\n",optarg);
+                break;
             default: usage(&args);
         }
     }

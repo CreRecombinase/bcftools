@@ -1,6 +1,6 @@
 /*  vcffilter.c -- Apply fixed-threshold filters.
 
-    Copyright (C) 2013-2021 Genome Research Ltd.
+    Copyright (C) 2013-2022 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -39,6 +39,7 @@ THE SOFTWARE.  */
 #include "bcftools.h"
 #include "filter.h"
 #include "rbuf.h"
+#include "regidx.h"
 
 // Logic of the filters: include or exclude sites which match the filters?
 #define FLT_INCLUDE 1
@@ -71,24 +72,46 @@ typedef struct _args_t
     bcf_srs_t *files;
     bcf_hdr_t *hdr;
     htsFile *out_fh;
-    int output_type, n_threads;
+    int output_type, n_threads, clevel;
 
-    char **argv, *output_fname, *targets_list, *regions_list;
-    int argc, record_cmd_line;
+    char **argv, *output_fname, *targets_list, *regions_list, *mask_list;
+    int argc, record_cmd_line, mask_is_file, mask_overlap, mask_negate;
+    regidx_t *mask;
 }
 args_t;
 
 static void init_data(args_t *args)
 {
-    args->out_fh = hts_open(args->output_fname,hts_bcf_wmode2(args->output_type,args->output_fname));
+    char wmode[8];
+    set_wmode(wmode,args->output_type,args->output_fname,args->clevel);
+    args->out_fh = hts_open(args->output_fname ? args->output_fname : "-", wmode);
     if ( args->out_fh == NULL ) error("Can't write to \"%s\": %s\n", args->output_fname, strerror(errno));
     if ( args->n_threads ) hts_set_threads(args->out_fh, args->n_threads);
+
+    if ( args->mask_list )
+    {
+        if ( args->mask_list[0]=='^' ) args->mask_negate = 1;
+        if ( args->mask_is_file )
+            args->mask = regidx_init(args->mask_negate?args->mask_list+1:args->mask_list,NULL,NULL,0,NULL);
+        else
+        {
+            char *rmme = strdup(args->mask_negate?args->mask_list+1:args->mask_list), *tmp = rmme;
+            while ( *tmp )
+            {
+                if ( *tmp==',' ) *tmp = '\n';
+                tmp++;
+            }
+            args->mask = regidx_init_string(rmme, regidx_parse_reg, NULL, 0, NULL);
+            free(rmme);
+        }
+        if ( !args->mask )
+            error("Could not initialize the mask: %s\n",args->mask_list);
+    }
 
     args->hdr = args->files->readers[0].header;
     args->flt_pass = bcf_hdr_id2int(args->hdr,BCF_DT_ID,"PASS"); assert( !args->flt_pass );  // sanity check: required by BCF spec
 
-    // -i or -e: append FILTER line
-    if ( args->soft_filter && args->filter_logic )
+    if ( args->soft_filter && (args->filter_logic || args->mask_list) )
     {
         kstring_t flt_name = {0,0,0};
         if ( strcmp(args->soft_filter,"+") )
@@ -104,18 +127,28 @@ static void init_data(args_t *args)
             }
             while ( bcf_hdr_idinfo_exists(args->hdr,BCF_HL_FLT,id) );
         }
-        // escape quotes
+
         kstring_t tmp = {0,0,0};
-        char *t = args->filter_str;
-        while ( *t )
+        if ( args->filter_logic )
         {
-            if ( *t=='"' ) kputc('\\',&tmp);
-            kputc(*t,&tmp);
-            t++;
+            // -i or -e: append FILTER line
+            ksprintf(&tmp,"Set if %s: ",args->filter_logic & FLT_INCLUDE ? "not true" : "true");
+
+            // escape quotes
+            char *t = args->filter_str;
+            while ( *t )
+            {
+                if ( *t=='"' ) kputc('\\',&tmp);
+                kputc(*t,&tmp);
+                t++;
+            }
         }
-        int ret = bcf_hdr_printf(args->hdr, "##FILTER=<ID=%s,Description=\"Set if %s: %s\">", flt_name.s,args->filter_logic & FLT_INCLUDE ? "not true" : "true", tmp.s);
+        else if ( args->mask_list )
+            ksprintf(&tmp,"Record masked by region");
+
+        int ret = bcf_hdr_printf(args->hdr, "##FILTER=<ID=%s,Description=\"%s\">", flt_name.s,tmp.s);
         if ( ret!=0 )
-            error("Failed to append header line: ##FILTER=<ID=%s,Description=\"Set if %s: %s\">\n", flt_name.s,args->filter_logic & FLT_INCLUDE ? "not true" : "true", tmp.s);
+            error("Failed to append header line: ##FILTER=<ID=%s,Description=\"%s\">\n", flt_name.s,tmp.s);
         args->flt_fail = bcf_hdr_id2int(args->hdr,BCF_DT_ID,flt_name.s); assert( args->flt_fail>=0 );
         free(flt_name.s);
         free(tmp.s);
@@ -172,6 +205,7 @@ static void destroy_data(args_t *args)
         filter_destroy(args->filter);
     free(args->tmpi);
     free(args->tmp_ac);
+    if ( args->mask ) regidx_destroy(args->mask);
 }
 
 static void flush_buffer(args_t *args, int n)
@@ -401,6 +435,35 @@ static void set_genotypes(args_t *args, bcf1_t *line, int pass_site)
     if ( has_ac )  bcf_update_info_int32(args->hdr,line,"AC",args->tmp_ac,line->n_allele-1);
 }
 
+static void _set_variant_boundaries(bcf1_t *rec, hts_pos_t *beg, hts_pos_t *end)
+{
+    hts_pos_t off;
+    if ( rec->n_allele )
+    {
+        off = rec->rlen;
+        bcf_unpack(rec, BCF_UN_STR);
+        int i;
+        for (i=1; i<rec->n_allele; i++)
+        {
+            // Make symbolic alleles start at POS, although this is not strictly true for
+            // <DEL>,<INS> where POS should be the position BEFORE the deletion/insertion.
+            // However, since arbitrary symbolic alleles can be defined by the user, we
+            // will simplify the interpretation of --targets-overlap and --region-overlap.
+            int j = 0;
+            char *ref = rec->d.allele[0];
+            char *alt = rec->d.allele[i];
+            while ( ref[j] && alt[j] && ref[j]==alt[j] ) j++;
+            if ( off > j ) off = j;
+            if ( !off ) break;
+        }
+    }
+    else
+        off = 0;
+
+    *beg = rec->pos + off;
+    *end = rec->pos + rec->rlen - 1;
+}
+
 static void usage(args_t *args)
 {
     fprintf(stderr, "\n");
@@ -408,21 +471,26 @@ static void usage(args_t *args)
     fprintf(stderr, "Usage:   bcftools filter [options] <in.vcf.gz>\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Options:\n");
-    fprintf(stderr, "    -e, --exclude <expr>          exclude sites for which the expression is true (see man page for details)\n");
-    fprintf(stderr, "    -g, --SnpGap <int>[:type]     filter SNPs within <int> base pairs of an indel (the default) or any combination of indel,mnp,bnd,other,overlap\n");
-    fprintf(stderr, "    -G, --IndelGap <int>          filter clusters of indels separated by <int> or fewer base pairs allowing only one to pass\n");
-    fprintf(stderr, "    -i, --include <expr>          include only sites for which the expression is true (see man page for details\n");
-    fprintf(stderr, "    -m, --mode [+x]               \"+\": do not replace but add to existing FILTER; \"x\": reset filters at sites which pass\n");
-    fprintf(stderr, "        --no-version              do not append version and command line to the header\n");
-    fprintf(stderr, "    -o, --output <file>           write output to a file [standard output]\n");
-    fprintf(stderr, "    -O, --output-type <b|u|z|v>   b: compressed BCF, u: uncompressed BCF, z: compressed VCF, v: uncompressed VCF [v]\n");
-    fprintf(stderr, "    -r, --regions <region>        restrict to comma-separated list of regions\n");
-    fprintf(stderr, "    -R, --regions-file <file>     restrict to regions listed in a file\n");
-    fprintf(stderr, "    -s, --soft-filter <string>    annotate FILTER column with <string> or unique filter name (\"Filter%%d\") made up by the program (\"+\")\n");
-    fprintf(stderr, "    -S, --set-GTs <.|0>           set genotypes of failed samples to missing (.) or ref (0)\n");
-    fprintf(stderr, "    -t, --targets <region>        similar to -r but streams rather than index-jumps\n");
-    fprintf(stderr, "    -T, --targets-file <file>     similar to -R but streams rather than index-jumps\n");
-    fprintf(stderr, "        --threads <int>           use multithreading with <int> worker threads [0]\n");
+    fprintf(stderr, "    -e, --exclude EXPR             Exclude sites for which the expression is true (see man page for details)\n");
+    fprintf(stderr, "    -g, --SnpGap INT[:TYPE]        Filter SNPs within <int> base pairs of an indel (the default) or any combination of indel,mnp,bnd,other,overlap\n");
+    fprintf(stderr, "    -G, --IndelGap INT             Filter clusters of indels separated by <int> or fewer base pairs allowing only one to pass\n");
+    fprintf(stderr, "    -i, --include EXPR             Include only sites for which the expression is true (see man page for details\n");
+    fprintf(stderr, "        --mask [^]REGION           Soft filter regions, \"^\" to negate\n");
+    fprintf(stderr, "    -M, --mask-file [^]FILE        Soft filter regions listed in a file, \"^\" to negate\n");
+    fprintf(stderr, "        --mask-overlap 0|1|2       Mask if POS in the region (0), record overlaps (1), variant overlaps (2) [1]\n");
+    fprintf(stderr, "    -m, --mode [+x]                \"+\": do not replace but add to existing FILTER; \"x\": reset filters at sites which pass\n");
+    fprintf(stderr, "        --no-version               Do not append version and command line to the header\n");
+    fprintf(stderr, "    -o, --output FILE              Write output to a file [standard output]\n");
+    fprintf(stderr, "    -O, --output-type u|b|v|z[0-9] u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n");
+    fprintf(stderr, "    -r, --regions REGION           Restrict to comma-separated list of regions\n");
+    fprintf(stderr, "    -R, --regions-file FILE        Restrict to regions listed in a file\n");
+    fprintf(stderr, "        --regions-overlap 0|1|2    Include if POS in the region (0), record overlaps (1), variant overlaps (2) [1]\n");
+    fprintf(stderr, "    -s, --soft-filter STRING       Annotate FILTER column with <string> or unique filter name (\"Filter%%d\") made up by the program (\"+\")\n");
+    fprintf(stderr, "    -S, --set-GTs .|0              Set genotypes of failed samples to missing (.) or ref (0)\n");
+    fprintf(stderr, "    -t, --targets REGION           Similar to -r but streams rather than index-jumps\n");
+    fprintf(stderr, "    -T, --targets-file FILE        Similar to -R but streams rather than index-jumps\n");
+    fprintf(stderr, "        --targets-overlap 0|1|2    Include if POS in the region (0), record overlaps (1), variant overlaps (2) [0]\n");
+    fprintf(stderr, "        --threads INT              Use multithreading with <int> worker threads [0]\n");
     fprintf(stderr, "\n");
     exit(1);
 }
@@ -437,19 +505,28 @@ int main_vcffilter(int argc, char *argv[])
     args->output_type = FT_VCF;
     args->n_threads = 0;
     args->record_cmd_line = 1;
+    args->clevel = -1;
     int regions_is_file = 0, targets_is_file = 0;
+    int regions_overlap = 1;
+    int targets_overlap = 0;
+    args->mask_overlap  = 1;
 
     static struct option loptions[] =
     {
         {"set-GTs",required_argument,NULL,'S'},
         {"mode",required_argument,NULL,'m'},
+        {"mask",required_argument,NULL,10},
+        {"mask-file",required_argument,NULL,'M'},
+        {"mask-overlap",required_argument,NULL,11},
         {"soft-filter",required_argument,NULL,'s'},
         {"exclude",required_argument,NULL,'e'},
         {"include",required_argument,NULL,'i'},
         {"targets",required_argument,NULL,'t'},
         {"targets-file",required_argument,NULL,'T'},
+        {"targets-overlap",required_argument,NULL,4},
         {"regions",required_argument,NULL,'r'},
         {"regions-file",required_argument,NULL,'R'},
+        {"regions-overlap",required_argument,NULL,3},
         {"output",required_argument,NULL,'o'},
         {"output-type",required_argument,NULL,'O'},
         {"threads",required_argument,NULL,9},
@@ -498,7 +575,16 @@ int main_vcffilter(int argc, char *argv[])
                     case 'u': args->output_type = FT_BCF; break;
                     case 'z': args->output_type = FT_VCF_GZ; break;
                     case 'v': args->output_type = FT_VCF; break;
-                    default: error("The output type \"%s\" not recognised\n", optarg);
+                    default:
+                    {
+                        args->clevel = strtol(optarg,&tmp,10);
+                        if ( *tmp || args->clevel<0 || args->clevel>9 ) error("The output type \"%s\" not recognised\n", optarg);
+                    }
+                }
+                if ( optarg[1] )
+                {
+                    args->clevel = strtol(optarg+1,&tmp,10);
+                    if ( *tmp || args->clevel<0 || args->clevel>9 ) error("Could not parse argument: --compression-level %s\n", optarg+1);
                 }
                 break;
             case 's': args->soft_filter = optarg; break;
@@ -523,6 +609,22 @@ int main_vcffilter(int argc, char *argv[])
                 break;
             case  9 : args->n_threads = strtol(optarg, 0, 0); break;
             case  8 : args->record_cmd_line = 0; break;
+            case  3 :
+                regions_overlap = parse_overlap_option(optarg);
+                if ( regions_overlap < 0 ) error("Could not parse: --regions-overlap %s\n",optarg);
+                break;
+            case  4 :
+                targets_overlap = parse_overlap_option(optarg);
+                if ( targets_overlap < 0 ) error("Could not parse: --targets-overlap %s\n",optarg);
+                break;
+            case  10 : args->mask_list = optarg; break;
+            case 'M' : args->mask_list = optarg; args->mask_is_file = 1; break;
+            case  11 :
+                if ( !strcasecmp(optarg,"0") ) args->mask_overlap = 0;
+                else if ( !strcasecmp(optarg,"1") ) args->mask_overlap = 1;
+                else if ( !strcasecmp(optarg,"2") ) args->mask_overlap = 2;
+                else error("Could not parse: --mask-overlap %s\n",optarg);
+                break;
             case 'h':
             case '?': usage(args); break;
             default: error("Unknown argument: %s\n", optarg);
@@ -538,10 +640,13 @@ int main_vcffilter(int argc, char *argv[])
     }
     else fname = argv[optind];
 
+    if ( args->mask_list && !args->soft_filter ) error("The option --soft-filter is required with --mask and --mask-file options\n");
+
     // read in the regions from the command line
     if ( args->regions_list )
     {
         args->files->require_index = 1;
+        bcf_sr_set_opt(args->files,BCF_SR_REGIONS_OVERLAP,regions_overlap);
         if ( bcf_sr_set_regions(args->files, args->regions_list, regions_is_file)<0 )
             error("Failed to read the regions: %s\n", args->regions_list);
     }
@@ -552,12 +657,14 @@ int main_vcffilter(int argc, char *argv[])
         kputs(argv[optind+1],&tmp);
         for (i=optind+2; i<argc; i++) { kputc(',',&tmp); kputs(argv[i],&tmp); }
         args->files->require_index = 1;
+        bcf_sr_set_opt(args->files,BCF_SR_REGIONS_OVERLAP,regions_overlap);
         if ( bcf_sr_set_regions(args->files, tmp.s, regions_is_file)<0 )
             error("Failed to read the regions: %s\n", args->regions_list);
         free(tmp.s);
     }
     if ( args->targets_list )
     {
+        bcf_sr_set_opt(args->files,BCF_SR_TARGETS_OVERLAP,targets_overlap);
         if ( bcf_sr_set_targets(args->files, args->targets_list,targets_is_file, 0)<0 )
             error("Failed to read the targets: %s\n", args->targets_list);
     }
@@ -573,6 +680,16 @@ int main_vcffilter(int argc, char *argv[])
         {
             pass = filter_test(args->filter, line, &args->smpl_pass);
             if ( args->filter_logic & FLT_EXCLUDE ) pass = pass ? 0 : 1;
+        }
+        if ( args->mask )
+        {
+            hts_pos_t beg, end;
+            if ( args->mask_overlap==0 ) beg = end = line->pos;
+            else if ( args->mask_overlap==1 ) beg = line->pos, end = line->pos + line->rlen - 1;
+            else _set_variant_boundaries(line,&beg,&end);
+            int mpass = regidx_overlap(args->mask,bcf_seqname(args->hdr,line),beg,end,NULL) ? 0 : 1;
+            if ( args->mask_negate ) mpass = mpass ? 0 : 1;
+            pass &= mpass;
         }
         if ( args->soft_filter || args->set_gts || pass )
         {

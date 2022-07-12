@@ -64,11 +64,12 @@ struct _args_t
     kstring_t str;
     int32_t *gts;
     float *flt;
-    int rev_als, output_vcf_ids, hap2dip, output_chrom_first_col;
+    int rev_als, output_vcf_ids, hap2dip, gen_3N6;
     int nsamples, *samples, sample_is_file, targets_is_file, regions_is_file, output_type;
+    int regions_overlap, targets_overlap;
     char **argv, *sample_list, *targets_list, *regions_list, *tag, *columns;
     char *outfname, *infname, *ref_fname, *sex_fname;
-    int argc, n_threads, record_cmd_line, keep_duplicates;
+    int argc, n_threads, record_cmd_line, keep_duplicates, clevel;
 };
 
 static void destroy_data(args_t *args)
@@ -88,11 +89,13 @@ static void open_vcf(args_t *args, const char *format_str)
 
     if ( args->regions_list )
     {
+        bcf_sr_set_opt(args->files,BCF_SR_REGIONS_OVERLAP,args->regions_overlap);
         if ( bcf_sr_set_regions(args->files, args->regions_list, args->regions_is_file)<0 )
             error("Failed to read the regions: %s\n", args->regions_list);
     }
     if ( args->targets_list )
     {
+        bcf_sr_set_opt(args->files,BCF_SR_TARGETS_OVERLAP,args->targets_overlap);
         if ( bcf_sr_set_targets(args->files, args->targets_list, args->targets_is_file, 0)<0 )
             error("Failed to read the targets: %s\n", args->targets_list);
     }
@@ -136,53 +139,82 @@ static void open_vcf(args_t *args, const char *format_str)
     free(samples);
 }
 
-static int tsv_setter_chrom_pos_ref_alt(tsv_t *tsv, bcf1_t *rec, void *usr)
+// Try to set CHROM:POS_REF_ALT[_END]. Return 0 on success, -1 on error
+static int _set_chrom_pos_ref_alt(tsv_t *tsv, bcf1_t *rec, void *usr)
 {
     args_t *args = (args_t*) usr;
 
     char tmp, *se = tsv->ss, *ss = tsv->ss;
     while ( se < tsv->se && *se!=':' ) se++;
-    if ( *se!=':' ) error("Could not parse CHROM in CHROM:POS_REF_ALT id: %s\n", tsv->ss);
+    if ( *se!=':' ) return -1;
     tmp = *se; *se = 0;
-    rec->rid = bcf_hdr_name2id(args->header,ss); 
-    if ( rec->rid<0 ) error("Could not determine sequence name or multiple sequences present: %s\n", tsv->ss);
+    int rid = bcf_hdr_name2id(args->header,ss);
     *se = tmp;
+    if ( rid<0 ) return -1;
 
     // POS
-    rec->pos = strtol(se+1,&ss,10);
-    if ( ss==se+1 ) error("Could not parse POS in CHROM:POS_REF_ALT: %s\n", tsv->ss);
-    rec->pos--;
-
-    // ID
-    if ( args->output_vcf_ids )
-    {
-        char tmp = *tsv->se;
-        *tsv->se = 0;
-        bcf_update_id(args->header, rec, tsv->ss);
-        *tsv->se = tmp;
-    }
+    hts_pos_t pos = strtol(se+1,&ss,10);
+    if ( ss==se+1 ) return -1;
+    pos--;
 
     // REF,ALT
     args->str.l = 0;
     se = ++ss;
     while ( se < tsv->se && *se!='_' ) se++; 
-    if ( *se!='_' ) error("Could not parse REF in CHROM:POS_REF_ALT id: %s\n", tsv->ss);
+    if ( *se!='_' ) return -1;
     kputsn(ss,se-ss,&args->str);
     ss = ++se;
     while ( se < tsv->se && *se!='_' && isspace(*tsv->se) ) se++;
-    if ( se < tsv->se && *se!='_' && isspace(*tsv->se) ) error("Could not parse ALT in CHROM:POS_REF_ALT id: %s\n", tsv->ss);
+    if ( se < tsv->se && *se!='_' && isspace(*tsv->se) ) return -1;
     kputc(',',&args->str);
     kputsn(ss,se-ss,&args->str);
-    bcf_update_alleles_str(args->header, rec, args->str.s);
 
     // END - optional
-    if (*se && *se=='_') {
+    if (*se && *se=='_')
+    {
         long end = strtol(se+1,&ss,10);
-        if ( ss==se+1 ) error("Could not parse END in CHROM:POS_REF_ALT_END: %s\n", tsv->ss);
+        if ( ss==se+1 ) return -1;
         bcf_update_info_int32(args->header, rec, "END", &end, 1);
     }
 
+    rec->rid = rid;
+    rec->pos = pos;
+    bcf_update_alleles_str(args->header, rec, args->str.s);
+
     return 0;
+}
+static int tsv_setter_chrom_pos_ref_alt_or_chrom(tsv_t *tsv, bcf1_t *rec, void *usr)
+{
+    args_t *args = (args_t*)usr;
+    int ret = _set_chrom_pos_ref_alt(tsv,rec,usr);
+    if ( !ret ) return ret;
+    return tsv_setter_chrom(tsv,rec,args->header);
+}
+static int tsv_setter_chrom_pos_ref_alt(tsv_t *tsv, bcf1_t *rec, void *usr)
+{
+    int ret = _set_chrom_pos_ref_alt(tsv,rec,usr);
+    if ( ret!=0 ) error("Could not parse the CHROM:POS_REF_ALT[_END] string: %s\n", tsv->ss);
+    return ret;
+}
+// This function must be called first, then tsv_setter_chrom_pos_ref_alt_id_or_die.
+// One of them is expected to find the CHROM:POS_REF_ALT[_END] string, if not, die.
+static int tsv_setter_chrom_pos_ref_alt_or_id(tsv_t *tsv, bcf1_t *rec, void *usr)
+{
+    args_t *args = (args_t*)usr;
+    if ( _set_chrom_pos_ref_alt(tsv,rec,usr)==0 )  return 0;
+    rec->pos = -1;  // mark the record as unset
+    if ( !args->output_vcf_ids) return 0;
+    return tsv_setter_id(tsv,rec,usr);
+}
+static int tsv_setter_chrom_pos_ref_alt_id_or_die(tsv_t *tsv, bcf1_t *rec, void *usr)
+{
+    args_t *args = (args_t*)usr;
+    if ( rec->pos!=-1 )
+    {
+        if ( !args->output_vcf_ids ) return 0;
+        return tsv_setter_id(tsv,rec,usr);
+    }
+    return tsv_setter_chrom_pos_ref_alt(tsv,rec,usr);
 }
 static int tsv_setter_verify_pos(tsv_t *tsv, bcf1_t *rec, void *usr)
 {
@@ -331,7 +363,8 @@ static void gensample_to_vcf(args_t *args)
      *
      *  Second column is expected in the form of CHROM:POS_REF_ALT. We use second
      *  column because the first can be empty ("--") when filling sites from reference 
-     *  panel.
+     *  panel. When the option --vcf-ids is given, the first column is used to set the
+     *  VCF ID.
      *
      *  Output: VCF with filled GT,GP
      *
@@ -359,22 +392,29 @@ static void gensample_to_vcf(args_t *args)
     if ( !gen_fh ) error("Could not read: %s\n", gen_fname);
     if ( hts_getline(gen_fh, KS_SEP_LINE, &line) <= 0 ) error("Empty file: %s\n", gen_fname);
 
-    // Find out the chromosome name, sample names, init and print the VCF header
+    // Find out the chromosome name, depending on the format variant (--3N6 or plain) and the ordering
+    // of the columns (CHROM:POS_REF_ALT comes first or second)
     args->str.l = 0;
-    char *ss, *se = line.s;
+    char *sb = line.s, *se = line.s;
     while ( *se && !isspace(*se) ) se++;
-    if ( !*se ) error("Could not parse %s: %s\n", gen_fname,line.s);
-    ss = se+1;
-    se = strchr(ss,':');
-    if ( !se ) error("Expected CHROM:POS_REF_ALT in second column of %s\n", gen_fname);
-    kputsn(ss, se-ss, &args->str);
+    if ( !*se ) error("Could not determine CHROM in %s: %s\n", gen_fname,line.s);
+    if ( args->gen_3N6 )    // first column, just CHROM
+        kputsn(sb, se-sb, &args->str);
+    else                    // first or second column, part of CHROM:POS_REF_ALT
+    {
+        char *sc = strchr(sb,':');
+        if ( !sc || sc > se )
+        {
+            while ( *se && !isspace(*se) ) se++;
+            if ( !*se ) error("Could not determine CHROM in %s: %s\n", gen_fname,line.s);
+            sb = ++se;
+            sc = strchr(sb,':');
+            if ( !sc ) error("Could not determine CHROM in %s: %s\n", gen_fname,line.s);
+        }
+        kputsn(sb, sc-sb, &args->str);
+    }
 
-    tsv_t *tsv = tsv_init("-,CHROM_POS_REF_ALT,POS,REF_ALT,GT_GP");
-    tsv_register(tsv, "CHROM_POS_REF_ALT", tsv_setter_chrom_pos_ref_alt, args);
-    tsv_register(tsv, "POS", tsv_setter_verify_pos, NULL);
-    tsv_register(tsv, "REF_ALT", tsv_setter_verify_ref_alt, args);
-    tsv_register(tsv, "GT_GP", tsv_setter_gt_gp, args);
-
+    // Initialize and print the VCF header, args->str.s contains the chr name
     args->header = bcf_hdr_init("w");
     bcf_hdr_append(args->header, "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position of the variant described in this record\">");
     bcf_hdr_append(args->header, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
@@ -382,6 +422,21 @@ static void gensample_to_vcf(args_t *args)
     bcf_hdr_printf(args->header, "##contig=<ID=%s,length=%d>", args->str.s,0x7fffffff);   // MAX_CSI_COOR
     if (args->record_cmd_line) bcf_hdr_append_version(args->header, args->argc, args->argv, "bcftools_convert");
 
+    tsv_t *tsv;
+    if ( args->gen_3N6 )
+    {
+        tsv = tsv_init("CHROM,CHROM_POS_REF_ALT,ID,POS,REF_ALT,GT_GP");
+        tsv_register(tsv, "CHROM", tsv_setter_chrom, args);
+    }
+    else
+        tsv = tsv_init("CHROM_POS_REF_ALT,ID,POS,REF_ALT,GT_GP");
+    tsv_register(tsv, "CHROM_POS_REF_ALT", tsv_setter_chrom_pos_ref_alt_or_id, args);
+    tsv_register(tsv, "ID", tsv_setter_chrom_pos_ref_alt_id_or_die, args);
+    tsv_register(tsv, "POS", tsv_setter_verify_pos, NULL);
+    tsv_register(tsv, "REF_ALT", tsv_setter_verify_ref_alt, args);
+    tsv_register(tsv, "GT_GP", tsv_setter_gt_gp, args);
+
+    // Find out sample names
     int i, nsamples;
     char **samples = hts_readlist(sample_fname, 1, &nsamples);
     if ( !samples ) error("Could not read %s\n", sample_fname);
@@ -394,7 +449,9 @@ static void gensample_to_vcf(args_t *args)
     for (i=0; i<nsamples; i++) free(samples[i]);
     free(samples);
 
-    htsFile *out_fh = hts_open(args->outfname,hts_bcf_wmode2(args->output_type,args->outfname));
+    char wmode[8];
+    set_wmode(wmode,args->output_type,args->outfname,args->clevel);
+    htsFile *out_fh = hts_open(args->outfname ? args->outfname : "-", wmode);
     if ( out_fh == NULL ) error("Can't write to \"%s\": %s\n", args->outfname, strerror(errno));
     if ( args->n_threads ) hts_set_threads(out_fh, args->n_threads);
     if ( bcf_hdr_write(out_fh,args->header)!=0 ) error("[%s] Error: cannot write the header to %s\n", __func__,args->outfname);
@@ -451,6 +508,11 @@ static void haplegendsample_to_vcf(args_t *args)
      */
     kstring_t line = {0,0,0};
 
+    if ( args->output_vcf_ids )
+        error(
+            "The option --haplegendsample2vcf cannot be combined with --vcf-ids. This is because the\n"
+            "ID column must be formatted as \"CHROM:POS_REF_ALT\" to check sanity of the operation\n");
+
     char *hap_fname = NULL, *leg_fname = NULL, *sample_fname = NULL;
     sample_fname = strchr(args->infname,',');
     if ( !sample_fname )
@@ -495,7 +557,6 @@ static void haplegendsample_to_vcf(args_t *args)
     tsv_register(leg_tsv, "CHROM_POS_REF_ALT", tsv_setter_chrom_pos_ref_alt, args);
     tsv_register(leg_tsv, "POS", tsv_setter_verify_pos, NULL);
     tsv_register(leg_tsv, "REF_ALT", tsv_setter_verify_ref_alt, args);
-
     tsv_t *hap_tsv = tsv_init("HAPS");
     tsv_register(hap_tsv, "HAPS", tsv_setter_haps, args);
 
@@ -522,7 +583,9 @@ static void haplegendsample_to_vcf(args_t *args)
     for (i=0; i<nrows; i++) free(samples[i]);
     free(samples);
 
-    htsFile *out_fh = hts_open(args->outfname,hts_bcf_wmode2(args->output_type,args->outfname));
+    char wmode[8];
+    set_wmode(wmode,args->output_type,args->outfname,args->clevel);
+    htsFile *out_fh = hts_open(args->outfname ? args->outfname : "-", wmode);
     if ( out_fh == NULL ) error("Can't write to \"%s\": %s\n", args->outfname, strerror(errno));
     if ( args->n_threads ) hts_set_threads(out_fh, args->n_threads);
     if ( bcf_hdr_write(out_fh,args->header)!=0 ) error("[%s] Error: cannot write the header to %s\n", __func__,args->outfname);
@@ -575,7 +638,8 @@ static void hapsample_to_vcf(args_t *args)
     /*
      *  Input: SHAPEIT output
      *
-     *      20:19995888_A_G 20:19995888 19995888 A G 0 0 0 0 ...
+     *      20:19995888_A_G rsid1 19995888 A G 0 0 0 0 ...
+     *      20 20:19995888_A_G 19995888 A G 0 0 0 0 ...
      *
      *  First column is expected in the form of CHROM:POS_REF_ALT
      *
@@ -605,23 +669,48 @@ static void hapsample_to_vcf(args_t *args)
     if ( !hap_fh ) error("Could not read: %s\n", hap_fname);
     if ( hts_getline(hap_fh, KS_SEP_LINE, &line) <= 0 ) error("Empty file: %s\n", hap_fname);
 
-    // Find out the chromosome name, sample names, init and print the VCF header
+    // Find out the chromosome name, it can be either in the first or second column
     args->str.l = 0;
-    char *se = strchr(line.s,':');
-    if ( !se ) error("Expected CHROM:POS_REF_ALT in first column of %s\n", hap_fname);
-    kputsn(line.s, se-line.s, &args->str);
+    char *sb = line.s, *se = line.s;
+    while ( *se && !isspace(*se) ) se++;
+    if ( !*se ) error("Could not determine CHROM in %s: %s\n", hap_fname,line.s);
+    if ( !args->output_vcf_ids )
+    {
+        // first column should be just CHROM, but the second must be CHROM:POS_REF_ALT, use that
+        sb = ++se;
+        while ( *se && !isspace(*se) ) se++;
+        if ( !*se ) error("Could not determine CHROM in %s: %s\n", hap_fname,line.s);
+        if ( !strchr(sb,':') )
+            error("Could not determine CHROM in the second column of %s: %s\n", hap_fname,line.s);
+    }
+    // Parse CHROM:POS_REF_ALT
+    char *sc = strchr(sb,':');
+    if ( !sc || sc > se )
+        error("Could not determine CHROM in %s: %s\n", hap_fname,line.s);
+    kputsn(sb, sc-sb, &args->str);
 
-    tsv_t *tsv = tsv_init("CHROM_POS_REF_ALT,-,POS,REF_ALT,HAPS");
-    tsv_register(tsv, "CHROM_POS_REF_ALT", tsv_setter_chrom_pos_ref_alt, args);
-    tsv_register(tsv, "POS", tsv_setter_verify_pos, NULL);
-    tsv_register(tsv, "REF_ALT", tsv_setter_verify_ref_alt, args);
-    tsv_register(tsv, "HAPS", tsv_setter_haps, args);
-
+    // Initialize and print the VCF header, args->str.s contains the chr name
     args->header = bcf_hdr_init("w");
     bcf_hdr_append(args->header, "##INFO=<ID=END,Number=1,Type=Integer,Description=\"End position of the variant described in this record\">");
     bcf_hdr_append(args->header, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
     bcf_hdr_printf(args->header, "##contig=<ID=%s,length=%d>", args->str.s,0x7fffffff);   // MAX_CSI_COOR
     if (args->record_cmd_line) bcf_hdr_append_version(args->header, args->argc, args->argv, "bcftools_convert");
+
+    tsv_t *tsv;
+    if ( args->output_vcf_ids )
+    {
+        tsv = tsv_init("CHROM_POS_REF_ALT,ID,POS,REF_ALT,HAPS");
+        tsv_register(tsv, "ID", tsv_setter_id, args);
+    }
+    else
+    {
+        tsv = tsv_init("CHROM,CHROM_POS_REF_ALT,POS,REF_ALT,HAPS");
+        tsv_register(tsv, "CHROM", tsv_setter_chrom_pos_ref_alt_or_chrom, args);
+    }
+    tsv_register(tsv, "CHROM_POS_REF_ALT", tsv_setter_chrom_pos_ref_alt, args);
+    tsv_register(tsv, "POS", tsv_setter_verify_pos, NULL);
+    tsv_register(tsv, "REF_ALT", tsv_setter_verify_ref_alt, args);
+    tsv_register(tsv, "HAPS", tsv_setter_haps, args);
 
     int i, nsamples;
     char **samples = hts_readlist(sample_fname, 1, &nsamples);
@@ -636,7 +725,9 @@ static void hapsample_to_vcf(args_t *args)
     for (i=0; i<nsamples; i++) free(samples[i]);
     free(samples);
 
-    htsFile *out_fh = hts_open(args->outfname,hts_bcf_wmode2(args->output_type,args->outfname));
+    char wmode[8];
+    set_wmode(wmode,args->output_type,args->outfname,args->clevel);
+    htsFile *out_fh = hts_open(args->outfname ? args->outfname : "-", wmode);
     if ( out_fh == NULL ) error("Can't write to \"%s\": %s\n", args->outfname, strerror(errno));
     if ( args->n_threads ) hts_set_threads(out_fh, args->n_threads);
     if ( bcf_hdr_write(out_fh,args->header)!=0 ) error("[%s] Error: cannot write to %s\n", __func__,args->outfname);
@@ -703,13 +794,13 @@ static void vcf_to_gensample(args_t *args)
     kstring_t str = {0,0,0};
 
     // insert chrom as first column if needed
-    if(args->output_chrom_first_col)
+    if ( args->gen_3N6 )
         kputs("%CHROM ", &str);
-    else
-        kputs("%CHROM:%POS\\_%REF\\_%FIRST_ALT ", &str);
+
+    kputs("%CHROM:%POS\\_%REF\\_%FIRST_ALT ", &str);
 
     // insert rsid as second column if needed
-    if(args->output_vcf_ids)
+    if ( args->output_vcf_ids )
         kputs("%ID ", &str);
     else
         kputs("%CHROM:%POS\\_%REF\\_%FIRST_ALT ", &str);
@@ -984,9 +1075,9 @@ static void vcf_to_hapsample(args_t *args)
 
     // print ID instead of CHROM:POS_REF_ALT1
     if ( args->output_vcf_ids )
-        kputs("%CHROM %ID %POS %REF %FIRST_ALT ", &str);
+        kputs("%CHROM:%POS\\_%REF\\_%FIRST_ALT %ID %POS %REF %FIRST_ALT ", &str);
     else
-        kputs("%CHROM:%POS\\_%REF\\_%FIRST_ALT %CHROM:%POS\\_%REF\\_%FIRST_ALT %POS %REF %FIRST_ALT ", &str);
+        kputs("%CHROM %CHROM:%POS\\_%REF\\_%FIRST_ALT %POS %REF %FIRST_ALT ", &str);
     
     if ( args->hap2dip )
         kputs("%_GT_TO_HAP2\n", &str);
@@ -1224,7 +1315,9 @@ static void tsv_to_vcf(args_t *args)
     bcf_hdr_add_sample(args->header, NULL);
     args->gts = (int32_t *) malloc(sizeof(int32_t)*n*2);
 
-    htsFile *out_fh = hts_open(args->outfname,hts_bcf_wmode2(args->output_type,args->outfname));
+    char wmode[8];
+    set_wmode(wmode,args->output_type,args->outfname,args->clevel);
+    htsFile *out_fh = hts_open(args->outfname ? args->outfname : "-", wmode);
     if ( out_fh == NULL ) error("Can't write to \"%s\": %s\n", args->outfname, strerror(errno));
     if ( args->n_threads ) hts_set_threads(out_fh, args->n_threads);
     if ( bcf_hdr_write(out_fh,args->header)!=0 ) error("[%s] Error: cannot write to %s\n", __func__,args->outfname);
@@ -1276,7 +1369,9 @@ static void tsv_to_vcf(args_t *args)
 static void vcf_to_vcf(args_t *args)
 {
     open_vcf(args,NULL);
-    htsFile *out_fh = hts_open(args->outfname,hts_bcf_wmode2(args->output_type,args->outfname));
+    char wmode[8];
+    set_wmode(wmode,args->output_type,args->outfname,args->clevel);
+    htsFile *out_fh = hts_open(args->outfname ? args->outfname : "-", wmode);
     if ( out_fh == NULL ) error("Can't write to \"%s\": %s\n", args->outfname, strerror(errno));
     if ( args->n_threads ) hts_set_threads(out_fh, args->n_threads);
 
@@ -1305,7 +1400,9 @@ static void gvcf_to_vcf(args_t *args)
     if ( !args->ref ) error("Could not load the fai index for reference %s\n", args->ref_fname);
 
     open_vcf(args,NULL);
-    htsFile *out_fh = hts_open(args->outfname,hts_bcf_wmode2(args->output_type,args->outfname));
+    char wmode[8];
+    set_wmode(wmode,args->output_type,args->outfname,args->clevel);
+    htsFile *out_fh = hts_open(args->outfname ? args->outfname : "-", wmode);
     if ( out_fh == NULL ) error("Can't write to \"%s\": %s\n", args->outfname, strerror(errno));
     if ( args->n_threads ) hts_set_threads(out_fh, args->n_threads);
 
@@ -1380,58 +1477,61 @@ static void usage(void)
     fprintf(stderr, "\n");
     fprintf(stderr, "About:   Converts VCF/BCF to other formats and back. See man page for file\n");
     fprintf(stderr, "         formats details. When specifying output files explicitly instead\n");
-    fprintf(stderr, "         of with <prefix>, one can use '-' for stdout and '.' to suppress.\n");
-    fprintf(stderr, "Usage:   bcftools convert [OPTIONS] <input_file>\n");
+    fprintf(stderr, "         of with PREFIX, one can use '-' for stdout and '.' to suppress.\n");
+    fprintf(stderr, "Usage:   bcftools convert [OPTIONS] INPUT_FILE\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "VCF input options:\n");
-    fprintf(stderr, "   -e, --exclude <expr>        exclude sites for which the expression is true\n");
-    fprintf(stderr, "   -i, --include <expr>        select sites for which the expression is true\n");
-    fprintf(stderr, "   -r, --regions <region>      restrict to comma-separated list of regions\n");
-    fprintf(stderr, "   -R, --regions-file <file>   restrict to regions listed in a file\n");
-    fprintf(stderr, "   -s, --samples <list>        list of samples to include\n");
-    fprintf(stderr, "   -S, --samples-file <file>   file of samples to include\n");
-    fprintf(stderr, "   -t, --targets <region>      similar to -r but streams rather than index-jumps\n");
-    fprintf(stderr, "   -T, --targets-file <file>   similar to -R but streams rather than index-jumps\n");
+    fprintf(stderr, "   -e, --exclude EXPR             Exclude sites for which the expression is true\n");
+    fprintf(stderr, "   -i, --include EXPR             Select sites for which the expression is true\n");
+    fprintf(stderr, "   -r, --regions REGION           Restrict to comma-separated list of regions\n");
+    fprintf(stderr, "   -R, --regions-file FILE        Restrict to regions listed in a file\n");
+    fprintf(stderr, "       --regions-overlap 0|1|2    Include if POS in the region (0), record overlaps (1), variant overlaps (2) [1]\n");
+    fprintf(stderr, "   -s, --samples LIST             List of samples to include\n");
+    fprintf(stderr, "   -S, --samples-file FILE        File of samples to include\n");
+    fprintf(stderr, "   -t, --targets REGION           Similar to -r but streams rather than index-jumps\n");
+    fprintf(stderr, "   -T, --targets-file FILE        Similar to -R but streams rather than index-jumps\n");
+    fprintf(stderr, "       --targets-overlap 0|1|2    Include if POS in the region (0), record overlaps (1), variant overlaps (2) [0]\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "VCF output options:\n");
-    fprintf(stderr, "       --no-version               do not append version and command line to the header\n");
-    fprintf(stderr, "   -o, --output <file>            output file name [stdout]\n");
-    fprintf(stderr, "   -O, --output-type <b|u|z|v>    b: compressed BCF, u: uncompressed BCF, z: compressed VCF, v: uncompressed VCF [v]\n");
-    fprintf(stderr, "       --threads <int>            use multithreading with <int> worker threads [0]\n");
+    fprintf(stderr, "       --no-version               Do not append version and command line to the header\n");
+    fprintf(stderr, "   -o, --output FILE              Output file name [stdout]\n");
+    fprintf(stderr, "   -O, --output-type u|b|v|z[0-9] u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n");
+    fprintf(stderr, "       --threads INT              Use multithreading with INT worker threads [0]\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "GEN/SAMPLE conversion (input/output from IMPUTE2):\n");
-    fprintf(stderr, "   -G, --gensample2vcf <...>   <prefix>|<gen-file>,<sample-file>\n");
-    fprintf(stderr, "   -g, --gensample <...>       <prefix>|<gen-file>,<sample-file>\n");
-    fprintf(stderr, "       --tag <string>          tag to take values for .gen file: GT,PL,GL,GP [GT]\n");
-    fprintf(stderr, "       --chrom                 output chromosome in first column instead of CHROM:POS_REF_ALT\n");
-    fprintf(stderr, "       --keep-duplicates       keep duplicate positions\n");
-    fprintf(stderr, "       --sex <file>            output sex column in the sample-file, input format is: Sample\\t[MF]\n");
-    fprintf(stderr, "       --vcf-ids               output VCF IDs in second column instead of CHROM:POS_REF_ALT\n");
+    fprintf(stderr, "   -G, --gensample2vcf ...        <PREFIX>|<GEN-FILE>,<SAMPLE-FILE>\n");
+    fprintf(stderr, "   -g, --gensample ...            <PREFIX>|<GEN-FILE>,<SAMPLE-FILE>\n");
+    fprintf(stderr, "       --3N6                      Use 3*N+6 column format instead of the old 3*N+5 column format\n");
+    fprintf(stderr, "       --tag STRING               Tag to take values for .gen file: GT,PL,GL,GP [GT]\n");
+    fprintf(stderr, "       --chrom                    Output chromosome in first column instead of CHROM:POS_REF_ALT\n");
+    fprintf(stderr, "       --keep-duplicates          Keep duplicate positions\n");
+    fprintf(stderr, "       --sex FILE                 Output sex column in the sample-file, input format is: Sample\\t[MF]\n");
+    fprintf(stderr, "       --vcf-ids                  Output VCF IDs in second column instead of CHROM:POS_REF_ALT\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "gVCF conversion:\n");
-    fprintf(stderr, "       --gvcf2vcf              expand gVCF reference blocks\n");
-    fprintf(stderr, "   -f, --fasta-ref <file>      reference sequence in fasta format\n");
+    fprintf(stderr, "       --gvcf2vcf                 Expand gVCF reference blocks\n");
+    fprintf(stderr, "   -f, --fasta-ref FILE           Reference sequence in fasta format\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "HAP/SAMPLE conversion (output from SHAPEIT):\n");
-    fprintf(stderr, "       --hapsample2vcf <...>   <prefix>|<hap-file>,<sample-file>\n");
-    fprintf(stderr, "       --hapsample <...>       <prefix>|<hap-file>,<sample-file>\n");
-    fprintf(stderr, "       --haploid2diploid       convert haploid genotypes to diploid homozygotes\n");
-    fprintf(stderr, "       --sex <file>            output sex column in the sample-file, input format is: Sample\\t[MF]\n");
-    fprintf(stderr, "       --vcf-ids               output VCF IDs instead of CHROM:POS_REF_ALT\n");
+    fprintf(stderr, "       --hapsample2vcf ...        <PREFIX>|<HAP-FILE>,<SAMPLE-FILE>\n");
+    fprintf(stderr, "       --hapsample ...            <PREFIX>|<HAP-FILE>,<SAMPLE-FILE>\n");
+    fprintf(stderr, "       --haploid2diploid          Convert haploid genotypes to diploid homozygotes\n");
+    fprintf(stderr, "       --sex FILE                 Output sex column in the sample-file, input format is: Sample\\t[MF]\n");
+    fprintf(stderr, "       --vcf-ids                  Output VCF IDs instead of CHROM:POS_REF_ALT\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "HAP/LEGEND/SAMPLE conversion:\n");
-    fprintf(stderr, "   -H, --haplegendsample2vcf <...>  <prefix>|<hap-file>,<legend-file>,<sample-file>\n");
-    fprintf(stderr, "   -h, --haplegendsample <...>      <prefix>|<hap-file>,<legend-file>,<sample-file>\n");
-    fprintf(stderr, "       --haploid2diploid            convert haploid genotypes to diploid homozygotes\n");
-    fprintf(stderr, "       --sex <file>                 output sex column in the sample-file, input format is: Sample\\t[MF]\n");
-    fprintf(stderr, "       --vcf-ids                    output VCF IDs instead of CHROM:POS_REF_ALT\n");
+    fprintf(stderr, "   -H, --haplegendsample2vcf ...  <PREFIX>|<HAP-FILE>,<LEGEND-FILE>,<SAMPLE-FILE>\n");
+    fprintf(stderr, "   -h, --haplegendsample ...      <PREFIX>|<HAP-FILE>,<LEGEND-FILE>,<SAMPLE-FILE>\n");
+    fprintf(stderr, "       --haploid2diploid          Convert haploid genotypes to diploid homozygotes\n");
+    fprintf(stderr, "       --sex FILE                 Output sex column in the sample-file, input format is: Sample\\t[MF]\n");
+    fprintf(stderr, "       --vcf-ids                  Output VCF IDs instead of CHROM:POS_REF_ALT\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "TSV conversion:\n");
-    fprintf(stderr, "       --tsv2vcf <file>        \n");
-    fprintf(stderr, "   -c, --columns <string>      columns of the input tsv file [ID,CHROM,POS,AA]\n");
-    fprintf(stderr, "   -f, --fasta-ref <file>      reference sequence in fasta format\n");
-    fprintf(stderr, "   -s, --samples <list>        list of sample names\n");
-    fprintf(stderr, "   -S, --samples-file <file>   file of sample names\n");
+    fprintf(stderr, "       --tsv2vcf FILE\n");
+    fprintf(stderr, "   -c, --columns STRING           Columns of the input tsv file [ID,CHROM,POS,AA]\n");
+    fprintf(stderr, "   -f, --fasta-ref FILE           Reference sequence in fasta format\n");
+    fprintf(stderr, "   -s, --samples LIST             List of sample names\n");
+    fprintf(stderr, "   -S, --samples-file FILE        File of sample names\n");
     fprintf(stderr, "\n");
     // fprintf(stderr, "PLINK options:\n");
     // fprintf(stderr, "   -p, --plink <prefix>|<ped>,<map>,<fam>|<bed>,<bim>,<fam>|<tped>,<tfam>\n");
@@ -1453,6 +1553,9 @@ int main_vcfconvert(int argc, char *argv[])
     args->output_type = FT_VCF;
     args->n_threads = 0;
     args->record_cmd_line = 1;
+    args->regions_overlap = 1;
+    args->targets_overlap = 0;
+    args->clevel = -1;
 
     static struct option loptions[] =
     {
@@ -1463,15 +1566,18 @@ int main_vcfconvert(int argc, char *argv[])
         {"threads",required_argument,NULL,9},
         {"regions",required_argument,NULL,'r'},
         {"regions-file",required_argument,NULL,'R'},
+        {"regions-overlap",required_argument,NULL,13},
         {"targets",required_argument,NULL,'t'},
         {"targets-file",required_argument,NULL,'T'},
+        {"targets-overlap",required_argument,NULL,14},
         {"samples",required_argument,NULL,'s'},
         {"samples-file",required_argument,NULL,'S'},
         {"sex",required_argument,NULL,11},
         {"gensample",required_argument,NULL,'g'},
         {"gensample2vcf",required_argument,NULL,'G'},
         {"tag",required_argument,NULL,1},
-        {"chrom",no_argument,NULL,8},        
+        {"chrom",no_argument,NULL,8},
+        {"3N6",no_argument,NULL,15},
         {"tsv2vcf",required_argument,NULL,2},
         {"hapsample",required_argument,NULL,7},
         {"hapsample2vcf",required_argument,NULL,3},
@@ -1486,6 +1592,7 @@ int main_vcfconvert(int argc, char *argv[])
         {"keep-duplicates",no_argument,NULL,12},
         {NULL,0,NULL,0}
     };
+    char *tmp;
     while ((c = getopt_long(argc, argv, "?h:r:R:s:S:t:T:i:e:g:G:o:O:c:f:H:",loptions,NULL)) >= 0) {
         switch (c) {
             case 'e':
@@ -1509,7 +1616,8 @@ int main_vcfconvert(int argc, char *argv[])
             case  5 : args->hap2dip = 1; break;
             case  6 : args->convert_func = gvcf_to_vcf; break;
             case  7 : args->convert_func = vcf_to_hapsample; args->outfname = optarg; break;
-            case  8 : args->output_chrom_first_col = 1; break;
+            case  8 : error("The --chrom option has been deprecated, please use --3N6 instead\n"); break;
+            case 15 : args->gen_3N6 = 1; break;
             case 'H': args->convert_func = haplegendsample_to_vcf; args->infname = optarg; break;
             case 'f': args->ref_fname = optarg; break;
             case 'c': args->columns = optarg; break;
@@ -1520,7 +1628,16 @@ int main_vcfconvert(int argc, char *argv[])
                     case 'u': args->output_type = FT_BCF; break;
                     case 'z': args->output_type = FT_VCF_GZ; break;
                     case 'v': args->output_type = FT_VCF; break;
-                    default: error("The output type \"%s\" not recognised\n", optarg);
+                    default:
+                    {
+                        args->clevel = strtol(optarg,&tmp,10);
+                        if ( *tmp || args->clevel<0 || args->clevel>9 ) error("The output type \"%s\" not recognised\n", optarg);
+                    }
+                }
+                if ( optarg[1] )
+                {
+                    args->clevel = strtol(optarg+1,&tmp,10);
+                    if ( *tmp || args->clevel<0 || args->clevel>9 ) error("Could not parse argument: --compression-level %s\n", optarg+1);
                 }
                 break;
             case 'h': args->convert_func = vcf_to_haplegendsample; args->outfname = optarg; break;
@@ -1528,6 +1645,14 @@ int main_vcfconvert(int argc, char *argv[])
             case 10 : args->record_cmd_line = 0; break;
             case 11 : args->sex_fname = optarg; break;
             case 12 : args->keep_duplicates = 1; break;
+            case 13 :
+                args->regions_overlap = parse_overlap_option(optarg);
+                if ( args->regions_overlap < 0 ) error("Could not parse: --regions-overlap %s\n",optarg);
+                break;
+            case 14 :
+                args->targets_overlap = parse_overlap_option(optarg);
+                if ( args->targets_overlap < 0 ) error("Could not parse: --targets-overlap %s\n",optarg);
+                break;
             case '?': usage(); break;
             default: error("Unknown argument: %s\n", optarg);
         }

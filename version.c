@@ -69,7 +69,7 @@ const char *hts_bcf_wmode(int file_type)
     return "w";                                 // uncompressed VCF
 }
 
-const char *hts_bcf_wmode2(int file_type, char *fname)
+const char *hts_bcf_wmode2(int file_type, const char *fname)
 {
     if ( !fname ) return hts_bcf_wmode(file_type);
     int len = strlen(fname);
@@ -80,3 +80,30 @@ const char *hts_bcf_wmode2(int file_type, char *fname)
     return hts_bcf_wmode(file_type);
 }
 
+void set_wmode(char dst[8], int file_type, const char *fname, int clevel)
+{
+    const char *ret = NULL;
+    int len = fname ? strlen(fname) : 0;
+    if ( len >= 4 && !strcasecmp(".bcf",fname+len-4) ) ret = hts_bcf_wmode(FT_BCF|FT_GZ);
+    else if ( len >= 4 && !strcasecmp(".vcf",fname+len-4) ) ret = hts_bcf_wmode(FT_VCF);
+    else if ( len >= 7 && !strcasecmp(".vcf.gz",fname+len-7) ) ret = hts_bcf_wmode(FT_VCF|FT_GZ);
+    else if ( len >= 8 && !strcasecmp(".vcf.bgz",fname+len-8) ) ret = hts_bcf_wmode(FT_VCF|FT_GZ);
+    else ret = hts_bcf_wmode(file_type);
+    if ( clevel>=0 && clevel<=9 )
+    {
+        if ( strchr(ret,'v') || strchr(ret,'u') ) error("Error: compression level (%d) cannot be set on uncompressed streams (%s)\n",clevel,fname);
+        len = strlen(ret);
+        if ( len>6 ) error("Fixme: %s\n", ret);
+        sprintf(dst, "%s%d", ret, clevel);
+    }
+    else
+        strcpy(dst, ret);
+}
+
+int parse_overlap_option(const char *arg)
+{
+    if ( strcasecmp(arg, "pos") == 0 || strcmp(arg, "0") == 0 ) return 0;
+    else if ( strcasecmp(arg, "record") == 0 || strcmp(arg, "1") == 0 ) return 1;
+    else if ( strcasecmp(arg, "variant") == 0 || strcmp(arg, "2") == 0 ) return 2;
+    else return -1;
+}

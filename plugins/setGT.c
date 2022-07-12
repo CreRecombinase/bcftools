@@ -1,6 +1,6 @@
 /*  plugins/setGT.c -- set gentoypes to given values
 
-    Copyright (C) 2015-2021 Genome Research Ltd.
+    Copyright (C) 2015-2022 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -90,7 +90,7 @@ const char *about(void)
 
 const char *usage(void)
 {
-    return 
+    return
         "About: Sets genotypes. The target genotypes can be specified as:\n"
         "           ./.  .. completely missing (\".\" or \"./.\", depending on ploidy)\n"
         "           ./x  .. partially missing (e.g., \"./0\" or \".|1\" but not \"./.\")\n"
@@ -165,7 +165,7 @@ void parse_binom_expr(args_t *args, char *str)
     memcpy(args->binom_tag,beg,end-beg);
     int tag_id = bcf_hdr_id2int(args->in_hdr,BCF_DT_ID,args->binom_tag);
     if ( !bcf_hdr_idinfo_exists(args->in_hdr,BCF_HL_FMT,tag_id) ) error("The FORMAT tag \"%s\" is not present in the VCF\n", args->binom_tag);
-    
+
     while ( *end && isspace(*end) ) end++;
     if ( !*end ) _parse_binom_expr_error(str);
 
@@ -205,7 +205,7 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
     };
     while ((c = getopt_long(argc, argv, "?hn:t:i:e:",loptions,NULL)) >= 0)
     {
-        switch (c) 
+        switch (c)
         {
             case 'e':
                 if ( args->filter_str ) error("Error: only one -i or -e expression can be given, and they cannot be combined\n");
@@ -283,6 +283,11 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out)
     if ( !args->filter_str && args->tgt_mask&GT_QUERY ) error("Expected -i/-e with -tq\n");
     if ( args->filter_str ) args->filter = filter_init(in,args->filter_str);
 
+    // Check the existence of FORMAT/GT tag, add it if not present
+    int id = bcf_hdr_id2int(args->in_hdr,BCF_DT_ID,"GT");
+    if ( !bcf_hdr_idinfo_exists(args->in_hdr,BCF_HL_FMT,id) )
+        bcf_hdr_printf(args->out_hdr, "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
+
     return 0;
 }
 
@@ -344,14 +349,19 @@ static inline int set_gt_custom(args_t *args, int32_t *ptr, int ngts, int nals)
         if ( args->custom.gt[i]==MINOR_ALLELE ) new_allele = args->custom.m_allele;
         else if ( args->custom.gt[i]==MAJOR_ALLELE ) new_allele = args->custom.M_allele;
         else new_allele = args->custom.gt[i];
-        if ( new_allele >= nals ) continue;
-        new_allele = args->custom.phased[i] ? bcf_gt_phased(new_allele) : bcf_gt_unphased(new_allele);
+        if ( new_allele >= nals ) // cannot set, the requested index is bigger than there are alleles in ALT
+            new_allele = bcf_gt_missing;
+        else
+            new_allele = args->custom.phased[i] ? bcf_gt_phased(new_allele) : bcf_gt_unphased(new_allele);
         if ( ptr[i]==new_allele ) continue;
         ptr[i] = new_allele;
         changed = 1;
     }
     while ( i<ngts )
+    {
+        if ( !changed && ptr[i]!=bcf_int32_vector_end ) changed = 1;
         ptr[i++] = bcf_int32_vector_end;
+    }
     return changed;
 }
 
@@ -403,12 +413,12 @@ bcf1_t *process(bcf1_t *rec)
         if ( nbinom<0 ) nbinom = 0;
         nbinom /= rec->n_sample;
     }
-    
+
     // Calculating allele frequency for each allele and determining major allele
     // only do this if use_major is true
     if ( args->new_mask & GT_MAJOR )
     {
-        int an = 0, maxAC = -1, majorAllele = -1;
+        int maxAC = -1, majorAllele = -1;
         hts_expand(int,rec->n_allele,args->marr,args->arr);
         int ret = bcf_calc_ac(args->in_hdr,rec,args->arr,BCF_UN_FMT);
         if ( ret<= 0 )
@@ -416,7 +426,6 @@ bcf1_t *process(bcf1_t *rec)
 
         for (i=0; i < rec->n_allele; ++i)
         {
-            an += args->arr[i];
             if (args->arr[i] > maxAC)
             {
                 maxAC = args->arr[i];
@@ -461,9 +470,9 @@ bcf1_t *process(bcf1_t *rec)
             int32_t *ptr = args->gts + i*ngts;
             if ( bcf_gt_is_missing(ptr[0]) || bcf_gt_is_missing(ptr[1]) || ptr[1]==bcf_int32_vector_end ) continue;
             if ( ptr[0]==ptr[1] ) continue; // a hom
-            int ia = bcf_gt_allele(ptr[0]); 
-            int ib = bcf_gt_allele(ptr[1]); 
-            if ( ia>=nbinom || ib>=nbinom ) 
+            int ia = bcf_gt_allele(ptr[0]);
+            int ib = bcf_gt_allele(ptr[1]);
+            if ( ia>=nbinom || ib>=nbinom )
                 error("The sample %s has incorrect number of %s fields at %s:%"PRId64"\n",
                         args->in_hdr->samples[i],args->binom_tag,bcf_seqname(args->in_hdr,rec),(int64_t) rec->pos+1);
 
@@ -483,7 +492,7 @@ bcf1_t *process(bcf1_t *rec)
     else if ( args->tgt_mask&GT_QUERY )
     {
         int pass_site = filter_test(args->filter,rec,(const uint8_t **)&args->smpl_pass);
-        if ( pass_site && args->filter_logic==FLT_EXCLUDE )
+        if ( args->filter_logic==FLT_EXCLUDE )
         {
             // -i can include a site but exclude a sample, -e exclude a site but include a sample
             if ( pass_site )
@@ -546,7 +555,11 @@ bcf1_t *process(bcf1_t *rec)
         }
     }
     args->nchanged += changed;
-    if ( changed ) bcf_update_genotypes(args->out_hdr, rec, args->gts, ngts*rec->n_sample);
+    if ( changed )
+    {
+        int ret = bcf_update_genotypes(args->out_hdr, rec, args->gts, ngts*rec->n_sample);
+        if ( ret!=0 ) error("Error: failed to update genotypes at %s:%"PRIhts_pos"\n",bcf_seqname(args->in_hdr,rec),rec->pos+1);
+    }
     return rec;
 }
 
