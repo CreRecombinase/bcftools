@@ -1,6 +1,6 @@
 /*  vcfannotate.c -- Annotate and edit VCF/BCF files.
 
-    Copyright (C) 2013-2022 Genome Research Ltd.
+    Copyright (C) 2013-2023 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -118,6 +118,8 @@ typedef struct _args_t
     htsFile *out_fh;
     int output_type, n_threads, clevel;
     bcf_sr_regions_t *tgts;
+    char *index_fn;
+    int write_index;
 
     regidx_t *tgt_idx;  // keep everything in memory only with .tab annotation file and -c BEG,END columns
     regitr_t *tgt_itr;
@@ -2022,7 +2024,7 @@ static int init_sample_map(args_t *args, bcf_hdr_t *src, bcf_hdr_t *dst)
     args->sample_map  = (int*) malloc(sizeof(int)*args->nsample_map);
     for (i=0; i<args->nsample_map; i++) args->sample_map[i] = -1;
 
-    int flags = !src ? SMPL_STRICT|SMPL_SINGLE : SMPL_STRICT|SMPL_SINGLE|SMPL_PAIR2; // is vcf vs tab annotation file
+    int flags = !src ? SMPL_STRICT|SMPL_SINGLE|SMPL_REORDER : SMPL_STRICT|SMPL_SINGLE|SMPL_PAIR2;   // is tab vs vcf annotation file
     smpl_ilist_t *ilist = smpl_ilist_init(dst, args->sample_names, args->sample_is_file, flags);    // gives mapping dst->src
     if ( !ilist || !ilist->n ) error("Could not parse the samples: %s\n", args->sample_names);
     args->nsmpl_annot = ilist->n;
@@ -2441,7 +2443,7 @@ static void init_columns(args_t *args)
             }
             int hdr_id = bcf_hdr_id2int(args->hdr_out, BCF_DT_ID, key_dst);
             if ( !bcf_hdr_idinfo_exists(args->hdr_out,BCF_HL_FMT,hdr_id) )
-                error("The tag \"%s\" is not defined in %s, was the -h option provided?\n", str.s, args->targets_fname);
+                error("The FORMAT tag \"%s\" is not defined in %s, was the -h option provided?\n", str.s, args->targets_fname);
             args->ncols++; args->cols = (annot_col_t*) realloc(args->cols,sizeof(annot_col_t)*args->ncols);
             annot_col_t *col = &args->cols[args->ncols-1];
             memset(col,0,sizeof(*col));
@@ -2555,9 +2557,9 @@ static void init_columns(args_t *args)
                             if ( ptr )
                             {
                                 *ptr = 0; tmp.l = 0; ksprintf(&tmp,"%s:=%s",key_src,ptr+1); *ptr = '=';
-                                error("The tag \"%s\" is not defined, is this what you want \"%s\" ?\n",key_src,tmp.s);
+                                error("The INFO tag \"%s\" is not defined, is this what you want \"%s\" ?\n",key_src,tmp.s);
                             }
-                            error("The tag \"%s\" is not defined in %s, was the -h option provided?\n", key_src,args->files->readers[1].fname);
+                            error("The INFO tag \"%s\" is not defined in %s, was the -h option provided?\n", key_src,args->files->readers[1].fname);
                         }
                         tmp.l = 0;
                         bcf_hrec_format_rename(hrec, key_dst, &tmp);
@@ -2568,7 +2570,7 @@ static void init_columns(args_t *args)
                     hdr_id = bcf_hdr_id2int(args->hdr_out, BCF_DT_ID, key_dst);
                 }
                 else
-                    error("The tag \"%s\" is not defined in %s, was the -h option provided?\n", key_dst, args->targets_fname);
+                    error("The INFO tag \"%s\" is not defined in %s, was the -h option provided?\n", key_dst, args->targets_fname);
                 assert( bcf_hdr_idinfo_exists(args->hdr_out,BCF_HL_INFO,hdr_id) );
             }
             if  ( args->tgts_is_vcf )
@@ -2863,9 +2865,16 @@ static void init_data(args_t *args)
 
     if ( args->mark_sites )
     {
-        if ( !args->targets_fname ) error("The -a option not given\n");
-        bcf_hdr_printf(args->hdr_out,"##INFO=<ID=%s,Number=0,Type=Flag,Description=\"Sites %slisted in %s\">",
-            args->mark_sites,args->mark_sites_logic==MARK_LISTED?"":"not ",args->mark_sites);
+        if ( !args->targets_fname )
+        {
+            if ( args->mark_sites_logic!=MARK_LISTED ) error("The -a option not given but -%s logic was requested\n",args->mark_sites);
+            fprintf(stderr,"Note: The -a option not given, all sites will be annotated with INFO/%s\n",args->mark_sites);
+            bcf_hdr_printf(args->hdr_out,"##INFO=<ID=%s,Number=0,Type=Flag,Description=\"Sites marked with `bcftools annotate -m %s`\">",
+                    args->mark_sites,args->mark_sites);
+        }
+        else
+            bcf_hdr_printf(args->hdr_out,"##INFO=<ID=%s,Number=0,Type=Flag,Description=\"Sites %slisted in %s\">",
+                args->mark_sites,args->mark_sites_logic==MARK_LISTED?"":"not ",args->mark_sites);
     }
 
     if (args->record_cmd_line) bcf_hdr_append_version(args->hdr_out, args->argc, args->argv, "bcftools_annotate");
@@ -2881,6 +2890,7 @@ static void init_data(args_t *args)
         if ( args->n_threads )
             hts_set_opt(args->out_fh, HTS_OPT_THREAD_POOL, args->files->p);
         if ( bcf_hdr_write(args->out_fh, args->hdr_out)!=0 ) error("[%s] Error: failed to write the header to %s\n", __func__,args->output_fname);
+        if ( args->write_index && init_index(args->out_fh,args->hdr,args->output_fname,&args->index_fn)<0 ) error("Error: failed to initialise index for %s\n",args->output_fname);
     }
 }
 
@@ -2943,7 +2953,19 @@ static void destroy_data(args_t *args)
         convert_destroy(args->set_ids);
     if ( args->filter )
         filter_destroy(args->filter);
-    if (args->out_fh) hts_close(args->out_fh);
+    if (args->out_fh)
+    {
+        if ( args->write_index )
+        {
+            if ( bcf_idx_save(args->out_fh)<0 )
+            {
+                if ( hts_close(args->out_fh)!=0 ) error("Error: close failed .. %s\n", args->output_fname?args->output_fname:"stdout");
+                error("Error: cannot write to index %s\n", args->index_fn);
+            }
+            free(args->index_fn);
+        }
+        if ( hts_close(args->out_fh)!=0 ) error("Error: close failed .. %s\n", args->output_fname?args->output_fname:"stdout");
+    }
     free(args->sample_map);
     free(args->merge_method_str.s);
 }
@@ -3096,9 +3118,9 @@ static void annotate(args_t *args, bcf1_t *line)
                         error("fixme: Could not set %s at %s:%"PRId64"\n", args->cols[j].hdr_key_src,bcf_seqname(args->hdr,line),(int64_t) line->pos+1);
                     if ( ret==0 )
                         args->cols[j].done = 1;
+                    has_overlap = 1;
                 }
             }
-            has_overlap = 1;
         }
         for (j=0; j<args->ncols; j++)
         {
@@ -3273,6 +3295,8 @@ static void annotate(args_t *args, bcf1_t *line)
 
     if ( args->mark_sites )
     {
+        if ( !args->targets_fname ) has_overlap = 1;
+
         // ideally, we'd like to be far more general than this in future, see https://github.com/samtools/bcftools/issues/87
         if ( args->mark_sites_logic==MARK_LISTED )
             bcf_update_info_flag(args->hdr_out,line,args->mark_sites,NULL,has_overlap?1:0);
@@ -3315,6 +3339,7 @@ static void usage(args_t *args)
     fprintf(stderr, "       --single-overlaps           Keep memory low by avoiding complexities arising from handling multiple overlapping intervals\n");
     fprintf(stderr, "   -x, --remove LIST               List of annotations (e.g. ID,INFO/DP,FORMAT/DP,FILTER) to remove (or keep with \"^\" prefix). See man page for details\n");
     fprintf(stderr, "       --threads INT               Number of extra output compression threads [0]\n");
+    fprintf(stderr, "       --write-index               Automatically index the output files [off]\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Examples:\n");
     fprintf(stderr, "   http://samtools.github.io/bcftools/howtos/annotate.html\n");
@@ -3371,6 +3396,7 @@ int main_vcfannotate(int argc, char *argv[])
         {"min-overlap",required_argument,NULL,12},
         {"no-version",no_argument,NULL,8},
         {"force",no_argument,NULL,'f'},
+        {"write-index",no_argument,NULL,13},
         {NULL,0,NULL,0}
     };
     char *tmp;
@@ -3427,6 +3453,7 @@ int main_vcfannotate(int argc, char *argv[])
             case 'H': args->header_lines = dbuf_push(args->header_lines,strdup(optarg)); break;
             case  1 : args->rename_chrs = optarg; break;
             case  2 :
+                if ( args->pair_logic==-1 ) args->pair_logic = 0;
                 if ( !strcmp(optarg,"snps") ) args->pair_logic |= BCF_SR_PAIR_SNP_REF;
                 else if ( !strcmp(optarg,"indels") ) args->pair_logic |= BCF_SR_PAIR_INDEL_REF;
                 else if ( !strcmp(optarg,"both") ) args->pair_logic |= BCF_SR_PAIR_BOTH_REF;
@@ -3446,6 +3473,7 @@ int main_vcfannotate(int argc, char *argv[])
             case 10 : args->single_overlaps = 1; break;
             case 11 : args->rename_annots = optarg; break;
             case 12 : args->min_overlap_str = optarg; break;
+            case 13 : args->write_index = 1; break;
             case '?': usage(args); break;
             default: error("Unknown argument: %s\n", optarg);
         }

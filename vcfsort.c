@@ -1,19 +1,19 @@
 /*  vcfsort.c -- sort subcommand
 
-   Copyright (C) 2017-2021 Genome Research Ltd.
+   Copyright (C) 2017-2023 Genome Research Ltd.
 
    Author: Petr Danecek <pd3@sanger.ac.uk>
-   
+
    Permission is hereby granted, free of charge, to any person obtaining a copy
    of this software and associated documentation files (the "Software"), to deal
    in the Software without restriction, including without limitation the rights
    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
    copies of the Software, and to permit persons to whom the Software is
    furnished to do so, subject to the following conditions:
-   
+
    The above copyright notice and this permission notice shall be included in
    all copies or substantial portions of the Software.
-   
+
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -62,6 +62,8 @@ typedef struct _args_t
     uint8_t *mem_block;
     size_t nbuf, mbuf, nblk;
     blk_t *blk;
+    char *index_fn;
+    int write_index;
 }
 args_t;
 
@@ -77,7 +79,7 @@ void clean_files(args_t *args)
             unlink(blk->fname);
             free(blk->fname);
         }
-        if ( blk->rec ) 
+        if ( blk->rec )
             bcf_destroy(blk->rec);
     }
     rmdir(args->tmp_dir);
@@ -107,7 +109,7 @@ int cmp_bcf_pos(const void *aptr, const void *bptr)
 
     int i;
     for (i=0; i<a->n_allele; i++)
-    { 
+    {
         if ( i >= b->n_allele ) return 1;
         int ret = strcasecmp(a->d.allele[i],b->d.allele[i]);
         if ( ret ) return ret;
@@ -124,6 +126,7 @@ void buf_flush(args_t *args)
 
     args->nblk++;
     args->blk = (blk_t*) realloc(args->blk, sizeof(blk_t)*args->nblk);
+    if ( !args->blk ) error("Error: could not allocate %zu bytes of memory, try reducing --max-mem\n",sizeof(blk_t)*args->nblk);
     blk_t *blk = args->blk + args->nblk - 1;
 
     kstring_t str = {0,0,0};
@@ -135,7 +138,7 @@ void buf_flush(args_t *args)
     htsFile *fh = hts_open(blk->fname, "wbu");
     if ( fh == NULL ) clean_files_and_throw(args, "Cannot write %s: %s\n", blk->fname, strerror(errno));
     if ( bcf_hdr_write(fh, args->hdr)!=0 ) clean_files_and_throw(args, "[%s] Error: cannot write to %s\n", __func__,blk->fname);
-    
+
     int i;
     for (i=0; i<args->nbuf; i++)
     {
@@ -226,7 +229,7 @@ void buf_push(args_t *args, bcf1_t *rec)
     bcf_destroy(rec);
 }
 
-void sort_blocks(args_t *args) 
+void sort_blocks(args_t *args)
 {
     htsFile *in = hts_open(args->fname, "r");
     if ( !in ) clean_files_and_throw(args, "Could not read %s\n", args->fname);
@@ -278,7 +281,7 @@ void blk_read(args_t *args, khp_blk_t *bhp, bcf_hdr_t *hdr, blk_t *blk)
     khp_insert(blk, bhp, &blk);
 }
 
-void merge_blocks(args_t *args) 
+void merge_blocks(args_t *args)
 {
     fprintf(stderr,"Merging %d temporary files\n", (int)args->nblk);
     khp_blk_t *bhp = khp_init(blk);
@@ -299,12 +302,22 @@ void merge_blocks(args_t *args)
     set_wmode(wmode,args->output_type,args->output_fname,args->clevel);
     htsFile *out = hts_open(args->output_fname ? args->output_fname : "-", wmode);
     if ( bcf_hdr_write(out, args->hdr)!=0 ) clean_files_and_throw(args, "[%s] Error: cannot write to %s\n", __func__,args->output_fname);
+    if ( args->write_index && init_index(out,args->hdr,args->output_fname,&args->index_fn)<0 ) error("Error: failed to initialise index for %s\n",args->output_fname);
     while ( bhp->ndat )
     {
         blk_t *blk = bhp->dat[0];
         if ( bcf_write(out, args->hdr, blk->rec)!=0 ) clean_files_and_throw(args, "[%s] Error: cannot write to %s\n", __func__,args->output_fname);
         khp_delete(blk, bhp);
         blk_read(args, bhp, args->hdr, blk);
+    }
+    if ( args->write_index )
+    {
+        if ( bcf_idx_save(out)<0 )
+        {
+            if ( hts_close(out)!=0 ) error("Error: close failed .. %s\n", args->output_fname?args->output_fname:"stdout");
+            error("Error: cannot write to index %s\n", args->index_fn);
+        }
+        free(args->index_fn);
     }
     if ( hts_close(out)!=0 ) clean_files_and_throw(args, "Close failed: %s\n", args->output_fname);
 
@@ -332,11 +345,12 @@ static void usage(args_t *args)
 #else
     fprintf(stderr, "    -T, --temp-dir DIR             temporary files [/tmp/bcftools.XXXXXX]\n");
 #endif
+    fprintf(stderr, "        --write-index              Automatically index the output files [off]\n");
     fprintf(stderr, "\n");
     exit(1);
 }
 
-size_t parse_mem_string(const char *str) 
+size_t parse_mem_string(const char *str)
 {
     char *tmp;
     double mem = strtod(str, &tmp);
@@ -352,6 +366,7 @@ static void init(args_t *args)
 {
     args->max_mem *= 0.9;
     args->mem_block = malloc(args->max_mem);
+    if ( !args->mem_block ) error("Error: could not allocate %zu bytes of memory, try reducing --max-mem\n",args->max_mem);
     args->mem = 0;
 
     args->tmp_dir = init_tmp_prefix(args->tmp_dir);
@@ -393,6 +408,7 @@ int main_sort(int argc, char *argv[])
         {"output-file",required_argument,NULL,'o'},
         {"output",required_argument,NULL,'o'},
         {"help",no_argument,NULL,'h'},
+        {"write-index",no_argument,NULL,1},
         {0,0,0,0}
     };
     char *tmp;
@@ -421,6 +437,7 @@ int main_sort(int argc, char *argv[])
                           if ( *tmp || args->clevel<0 || args->clevel>9 ) error("Could not parse argument: --compression-level %s\n", optarg+1);
                       }
                       break;
+            case  1 : args->write_index = 1; break;
             case 'h':
             case '?': usage(args); break;
             default: error("Unknown argument: %s\n", optarg);

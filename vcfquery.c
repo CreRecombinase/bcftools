@@ -1,6 +1,6 @@
 /*  vcfquery.c -- Extracts fields from VCF/BCF file.
 
-    Copyright (C) 2013-2022 Genome Research Ltd.
+    Copyright (C) 2013-2023 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -94,6 +94,7 @@ static void init_data(args_t *args)
         smpl_ilist_destroy(ilist);
     }
     args->convert = convert_init(args->header, samples, nsamples, args->format_str);
+    convert_set_option(args->convert, force_newline, 1);
     convert_set_option(args->convert, subset_samples, &args->smpl_pass);
     if ( args->allow_undef_tags ) convert_set_option(args->convert, allow_undef_tags, 1);
     free(samples);
@@ -125,6 +126,7 @@ static void query_vcf(args_t *args)
     }
 
     int i,max_convert_unpack = convert_max_unpack(args->convert);
+    int max_filter_unpack = args->filter ? filter_max_unpack(args->filter) : 0;
     while ( bcf_sr_next_line(args->files) )
     {
         if ( !bcf_sr_has_line(args->files,0) ) continue;
@@ -143,7 +145,7 @@ static void query_vcf(args_t *args)
                 if ( pass )
                 {
                     if ( !args->smpl_pass ) continue;
-                    if ( !(max_convert_unpack & BCF_UN_FMT) ) continue;
+                    if ( !(max_convert_unpack & BCF_UN_FMT) && !(max_filter_unpack & BCF_UN_FMT) ) continue;
 
                     pass = 0;
                     for (i=0; i<line->n_sample; i++)
@@ -292,7 +294,7 @@ int main_vcfquery(int argc, char *argv[])
             case 'f': args->format_str = strdup(optarg); break;
             case 'H': args->print_header = 1; break;
             case 'v': args->vcf_list = optarg; break;
-            case 'c': 
+            case 'c':
                 error("The --collapse option is obsolete, pipe through `bcftools norm -c` instead.\n");
                 break;
             case 'a':

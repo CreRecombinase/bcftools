@@ -1,5 +1,5 @@
 /*
-    Copyright (C) 2022 Genome Research Ltd.
+    Copyright (C) 2022-2023 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -44,12 +44,17 @@
 #define FLT_INCLUDE 1
 #define FLT_EXCLUDE 2
 
+#define DIR_NEAREST 0
+#define DIR_FWD     1
+#define DIR_REV     2
+#define DIR_BOTH    3
+
 typedef struct
 {
     char *tag;
     int argc, region_is_file, target_is_file, output_type, clevel;
-    int regions_overlap, targets_overlap;
-    int32_t prev_dist;
+    int regions_overlap, targets_overlap, direction;
+    int32_t fwd_dist, rev_dist;
     char **argv, *region, *target, *fname, *output_fname;
     char *filter_str;
     filter_t *filter;
@@ -58,6 +63,8 @@ typedef struct
     bcf_hdr_t *hdr;
     bcf_srs_t *sr;
     vcfbuf_t *buf;
+    char *index_fn;
+    int write_index;
 }
 args_t;
 
@@ -73,18 +80,20 @@ static const char *usage_text(void)
         "About: Annotate sites with distance to the nearest variant\n"
         "Usage: bcftools +variant-distance [Options]\n"
         "Options:\n"
-        "   -n, --tag-name STR              The tag name to be added [DIST]\n"
+        "   -d, --direction DIRECTION        Directionality: nearest, fwd, rev, both (adds a Number=2 tag) [nearest]\n"
+        "   -n, --tag-name STR               The tag name to be added [DIST]\n"
         "Common options:\n"
-        "   -e, --exclude EXPR              Exclude sites for which the expression is true\n"
-        "   -i, --include EXPR              Include only sites for which the expression is true\n"
-        "   -o, --output FILE               Write output to the FILE [standard output]\n"
-        "   -O, --output-type u|b|v|z[0-9]  u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n"
-        "   -r, --regions REGION            Restrict to comma-separated list of regions\n"
-        "   -R, --regions-file FILE         Restrict to regions listed in a file\n"
-        "       --regions-overlap 0|1|2     Include if POS in the region (0), record overlaps (1), variant overlaps (2) [1]\n"
-        "   -t, --targets REGION            Similar to -r but streams rather than index-jumps\n"
-        "   -T, --targets-file FILE         Similar to -R but streams rather than index-jumps\n"
-        "       --targets-overlap 0|1|2     Include if POS in the region (0), record overlaps (1), variant overlaps (2) [0]\n"
+        "   -e, --exclude EXPR               Exclude sites for which the expression is true\n"
+        "   -i, --include EXPR               Include only sites for which the expression is true\n"
+        "   -o, --output FILE                Write output to the FILE [standard output]\n"
+        "   -O, --output-type u|b|v|z[0-9]   u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]\n"
+        "   -r, --regions REGION             Restrict to comma-separated list of regions\n"
+        "   -R, --regions-file FILE          Restrict to regions listed in a file\n"
+        "       --regions-overlap 0|1|2      Include if POS in the region (0), record overlaps (1), variant overlaps (2) [1]\n"
+        "   -t, --targets REGION             Similar to -r but streams rather than index-jumps\n"
+        "   -T, --targets-file FILE          Similar to -R but streams rather than index-jumps\n"
+        "       --targets-overlap 0|1|2      Include if POS in the region (0), record overlaps (1), variant overlaps (2) [0]\n"
+        "       --write-index                Automatically index the output files [off]\n"
         "Examples:\n"
         "   bcftools +variant-distance input.bcf -Ob -o output.bcf\n"
         "\n";
@@ -106,7 +115,13 @@ static void init_data(args_t *args)
         args->filter = filter_init(args->hdr, args->filter_str);
 
     if ( !args->tag ) args->tag = strdup("DIST");
-    bcf_hdr_printf(args->hdr,"##INFO=<ID=%s,Number=1,Type=Integer,Description=\"Distance to the  nearest variant\">",args->tag);
+    int nval = 1;
+    const char *desc = NULL;
+    if ( args->direction==DIR_FWD ) desc = "next";
+    else if ( args->direction==DIR_REV ) desc = "previous";
+    else if ( args->direction==DIR_NEAREST) desc = "nearest";
+    else desc = "previous and next", nval = 2;
+    bcf_hdr_printf(args->hdr,"##INFO=<ID=%s,Number=%d,Type=Integer,Description=\"Distance to the %s variant\">",args->tag,nval,desc);
 
     char wmode[8];
     set_wmode(wmode,args->output_type,args->output_fname,args->clevel);
@@ -114,6 +129,7 @@ static void init_data(args_t *args)
     if ( args->out_fh == NULL ) error("Can't write to \"%s\": %s\n", args->output_fname, strerror(errno));
 
     if ( bcf_hdr_write(args->out_fh, args->hdr)!=0 ) error("[%s] Error: cannot write to %s\n", __func__,args->output_fname);
+    if ( args->write_index && init_index(args->out_fh,args->hdr,args->output_fname,&args->index_fn)<0 ) error("Error: failed to initialise index for %s\n",args->output_fname);
 
     args->buf = vcfbuf_init(args->hdr, 0);
     vcfbuf_set_opt(args->buf,int,VCFBUF_DUMMY,1)
@@ -122,6 +138,15 @@ static void destroy_data(args_t *args)
 {
     if ( args->filter )
         filter_destroy(args->filter);
+    if ( args->write_index )
+    {
+        if ( bcf_idx_save(args->out_fh)<0 )
+        {
+            if ( hts_close(args->out_fh)!=0 ) error("Error: close failed .. %s\n", args->output_fname?args->output_fname:"stdout");
+            error("Error: cannot write to index %s\n", args->index_fn);
+        }
+        free(args->index_fn);
+    }
     if ( hts_close(args->out_fh)!=0 ) error("[%s] Error: close failed .. %s\n", __func__,args->output_fname);
     bcf_sr_destroy(args->sr);
     vcfbuf_destroy(args->buf);
@@ -130,14 +155,26 @@ static void destroy_data(args_t *args)
 }
 static void flush(args_t *args, int n)
 {
-    int i;
+    int32_t val[2];
+    int nval = 0, i;
+    if ( args->direction==DIR_FWD && args->fwd_dist ) nval = 1, val[0] = args->fwd_dist;
+    else if ( args->direction==DIR_REV && args->rev_dist ) nval = 1, val[0] = args->rev_dist;
+    else if ( args->direction==DIR_BOTH && (args->fwd_dist||args->rev_dist) ) nval = 2, val[0] = args->rev_dist, val[1] = args->fwd_dist;
+    else if ( args->direction==DIR_NEAREST && (args->fwd_dist||args->rev_dist) )
+    {
+        if ( !args->fwd_dist ) val[0] = args->rev_dist;
+        else if ( !args->rev_dist ) val[0] = args->fwd_dist;
+        else if ( args->rev_dist < args->fwd_dist ) val[0] = args->rev_dist;
+        else val[0] = args->fwd_dist;
+        nval = 1;
+    }
     for (i=0; i<n; i++)
     {
         bcf1_t *rec = vcfbuf_flush(args->buf, 1);
-        if ( args->prev_dist )
+        if ( nval )
         {
-            if ( bcf_update_info_int32(args->hdr,rec,args->tag,&args->prev_dist,1)!=0 )
-                error("[%s] Error: failed to update INFO/%s=%d\n",__func__,args->tag,args->prev_dist);
+            if ( bcf_update_info_int32(args->hdr,rec,args->tag,val,nval)!=0 )
+                error("[%s] Error: failed to update INFO/%s at %s:%"PRIhts_pos"\n",__func__,args->tag,bcf_seqname(args->hdr,rec),rec->pos+1);
         }
         if ( bcf_write(args->out_fh,args->hdr,rec)!=0 ) error("[%s] Error: cannot write to %s\n", __func__,args->output_fname);
     }
@@ -148,6 +185,7 @@ static void process(args_t *args, int done)
     {
         // If the buffer is not empty, all records must be duplicate positions and
         // the previous site may or may not be set
+        args->fwd_dist = 0;
         flush(args, vcfbuf_nsites(args->buf));
         return;
     }
@@ -175,15 +213,16 @@ static void process(args_t *args, int done)
     if ( i==n ) return;             // cannot flush yet, either a single record or all duplicates
     if ( rec->rid != rec0->rid )    // the new record is a different chr
     {
+        args->fwd_dist = 0;
         flush(args, i);
-        args->prev_dist = 0;
+        args->rev_dist = 0;
         return;
     }
 
     // the new record is a different pos
-    if ( !args->prev_dist || args->prev_dist > rec->pos - rec0->pos ) args->prev_dist = rec->pos - rec0->pos;
+    args->fwd_dist = rec->pos - rec0->pos;
     flush(args, i);
-    args->prev_dist = rec->pos - rec0->pos;
+    args->rev_dist = args->fwd_dist;
 }
 
 int run(int argc, char **argv)
@@ -195,6 +234,7 @@ int run(int argc, char **argv)
     args->clevel = -1;
     static struct option loptions[] =
     {
+        {"direction",required_argument,NULL,'d'},
         {"tag-name",required_argument,NULL,'n'},
         {"exclude",required_argument,NULL,'e'},
         {"include",required_argument,NULL,'i'},
@@ -206,14 +246,22 @@ int run(int argc, char **argv)
         {"targets-overlap",required_argument,NULL,2},
         {"output",required_argument,NULL,'o'},
         {"output-type",required_argument,NULL,'O'},
+        {"write-index",no_argument,NULL,4},
         {NULL,0,NULL,0}
     };
     int c;
     char *tmp;
-    while ((c = getopt_long(argc, argv, "r:R:t:T:o:O:n:",loptions,NULL)) >= 0)
+    while ((c = getopt_long(argc, argv, "r:R:t:T:o:O:n:d:",loptions,NULL)) >= 0)
     {
         switch (c)
         {
+            case 'd':
+                if ( !strcasecmp("nearest",optarg) ) args->direction = DIR_NEAREST;
+                else if ( !strcasecmp("fwd",optarg) ) args->direction = DIR_FWD;
+                else if ( !strcasecmp("rev",optarg) ) args->direction = DIR_REV;
+                else if ( !strcasecmp("both",optarg) ) args->direction = DIR_BOTH;
+                else error("Unknown argument to --direction: %s\n",optarg);
+                break;
             case 'n': args->tag = strdup(optarg); break;
             case 'e':
                 if ( args->filter_str ) error("Error: only one -i or -e expression can be given, and they cannot be combined\n");
@@ -252,6 +300,7 @@ int run(int argc, char **argv)
                           if ( *tmp || args->clevel<0 || args->clevel>9 ) error("Could not parse argument: --compression-level %s\n", optarg+1);
                       }
                       break;
+            case  4 : args->write_index = 1; break;
             case 'h':
             case '?':
             default: error("%s", usage_text()); break;

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="generator" content="Asciidoctor 2.0.16.dev">
+<meta name="generator" content="Asciidoctor 2.0.15.dev">
 <title>bcftools(1)</title>
 <link rel="stylesheet" href="./docbook-xsl.css">
 </head>
@@ -50,13 +50,13 @@ commands can thus be  combined  with  Unix pipes.</p>
 <div class="sect2">
 <h3 id="_version">VERSION</h3>
 <div class="paragraph">
-<p>This manual page was last updated <strong>2022-04-07</strong> and refers to bcftools git version <strong>1.15.1</strong>.</p>
+<p>This manual page was last updated <strong>2023-06-02 11:27 BST</strong> and refers to bcftools git version <strong>1.17-52-g0773541c+</strong>.</p>
 </div>
 </div>
 <div class="sect2">
 <h3 id="_bcf1">BCF1</h3>
 <div class="paragraph">
-<p>The BCF1 format output by versions of samtools &lt;= 0.1.19 is <strong>not</strong>
+<p>The obsolete BCF1 format output by versions of samtools &lt;= 0.1.19 is <strong>not</strong>
 compatible with this version of bcftools. To read BCF1 files one can use
 the view command from old versions of bcftools packaged with samtools
 versions &lt;= 0.1.19 to convert to VCF, which can then be read by
@@ -77,6 +77,12 @@ done with <em>bcftools view</em>. Users are now required to choose between the o
 samtools calling model (<em>-c/--consensus-caller</em>) and the new multiallelic
 calling model (<em>-m/--multiallelic-caller</em>). The multiallelic calling model
 is recommended for most tasks.</p>
+</div>
+</div>
+<div class="sect2">
+<h3 id="_filtering_expressions">FILTERING EXPRESSIONS</h3>
+<div class="paragraph">
+<p>See <strong><a href="#expressions">EXPRESSIONS</a></strong></p>
 </div>
 </div>
 </div>
@@ -171,6 +177,9 @@ list of available options, run <strong>bcftools</strong> <em>COMMAND</em> withou
 </div>
 <div class="ulist">
 <ul>
+<li>
+<p><strong><a href="#gff2gff">gff2gff</a></strong>  .. converts a GFF file to the format required by <strong><a href="#csq">csq</a></strong></p>
+</li>
 <li>
 <p><strong><a href="#plot-vcfstats">plot-vcfstats</a></strong>  .. plots the output of <strong><a href="#stats">stats</a></strong></p>
 </li>
@@ -282,8 +291,8 @@ Note that <strong>-r</strong> cannot be used in combination with <strong>-R</str
 <dd>
 <p>Regions can be specified either on command line or in a VCF, BED, or
 tab-delimited file (the default). The columns of the tab-delimited file
-can contain either positions (two-column format) or intervals (three-column
-format): CHROM, POS, and, optionally, END,  where positions are 1-based
+can contain either positions (two-column format: CHROM, POS) or intervals
+(three-column format: CHROM, BEG, END), but not both. Positions are 1-based
 and inclusive. The columns of the tab-delimited BED file are also
 CHROM, POS and END (trailing columns are ignored), but coordinates
 are 0-based, half-open.  To indicate that a file be treated as BED rather
@@ -416,6 +425,10 @@ Such a file can be easily created from a VCF using:</p>
 <dd>
 <p>Use multithreading with <em>INT</em> worker threads. The option is currently used only for the compression of the
 output stream, only when <em>--output-type</em> is <em>b</em> or <em>z</em>. Default: 0.</p>
+</dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output files. Can be used only for compressed BCF and VCF output.</p>
 </dd>
 </dl>
 </div>
@@ -668,6 +681,10 @@ except GT. To remove all INFO tags except "FOO" and "BAR", use
 "^INFO/FOO,INFO/BAR" (and similarly for FORMAT and FILTER).
 "INFO" can be abbreviated to "INF" and "FORMAT" to "FMT".</p>
 </dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
+</dd>
 </dl>
 </div>
 <div class="paragraph">
@@ -796,6 +813,10 @@ below), unlisted regions have ploidy 2. The default ploidy definition is</p>
 <dt class="hdlist1"><strong>--threads</strong> <em>INT</em></dt>
 <dd>
 <p>see <strong><a href="#common_options">Common Options</a></strong></p>
+</dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
 </dd>
 </dl>
 </div>
@@ -1161,6 +1182,10 @@ is performed and the program throws an error if it is not safe to use the option
 <dd>
 <p>see <strong><a href="#common_options">Common Options</a></strong></p>
 </dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
+</dd>
 </dl>
 </div>
 </div>
@@ -1194,18 +1219,14 @@ depth information, such as INFO/AD or FORMAT/AD. For that, consider using the
 <dd>
 <p>reference sequence in fasta format</p>
 </dd>
-<dt class="hdlist1"><strong>-H, --haplotype</strong> <em>1</em>|<em>2</em>|<em>R</em>|<em>A</em>|<em>I</em>|<em>LR</em>|<em>LA</em>|<em>SR</em>|<em>SA</em>|<em>1pIu</em>|<em>2pIu</em></dt>
+<dt class="hdlist1"><strong>-H, --haplotype</strong> N|<em>R</em>|<em>A</em>|<em>I</em>|<em>LR</em>|<em>LA</em>|<em>SR</em>|<em>SA</em>|<em>NpIu</em></dt>
 <dd>
 <p>choose which allele from the FORMAT/GT field to use (the codes are case-insensitive):</p>
 <div class="dlist">
 <dl>
-<dt class="hdlist1"><em>1</em></dt>
+<dt class="hdlist1"><em>N</em></dt>
 <dd>
-<p>the first allele, regardless of phasing</p>
-</dd>
-<dt class="hdlist1"><em>2</em></dt>
-<dd>
-<p>the second allele, regardless of phasing</p>
+<p>N={1,2,3,&#8230;&#8203;}, the allele index within the genotype, regardless of phasing</p>
 </dd>
 <dt class="hdlist1"><em>R</em></dt>
 <dd>
@@ -1227,18 +1248,21 @@ depth information, such as INFO/AD or FORMAT/AD. For that, consider using the
 <dd>
 <p>the shorter allele. If both have the same length, use the REF allele (SR), or the ALT allele  (SA)</p>
 </dd>
-<dt class="hdlist1"><em>1pIu, 2pIu</em></dt>
+<dt class="hdlist1"><em>NpIu</em></dt>
 <dd>
-<p>first/second allele for phased genotypes and IUPAC code for unphased genotypes</p>
-<div class="literalblock">
-<div class="content">
-<pre>This option requires *-s*, unless exactly one sample is present in the VCF</pre>
-</div>
-</div>
+<p>N={1,2,3,&#8230;&#8203;}, the allele index within genotype for phased genotypes and IUPAC code for unphased genotypes.
+For example, <em>1pIu</em> or <em>2pIu</em></p>
 </dd>
 </dl>
 </div>
 </dd>
+</dl>
+</div>
+<div class="paragraph">
+<p>Note that the <strong>-H, --haplotype</strong> option requires the <strong>-s, --samples</strong> option, unless exactly one sample is present in the VCF</p>
+</div>
+<div class="dlist">
+<dl>
 <dt class="hdlist1"><strong>-i, --include</strong> <em>EXPRESSION</em></dt>
 <dd>
 <p>include only sites for which <em>EXPRESSION</em> is true. For valid expressions see
@@ -1246,19 +1270,22 @@ depth information, such as INFO/AD or FORMAT/AD. For that, consider using the
 </dd>
 <dt class="hdlist1"><strong>-I, --iupac-codes</strong></dt>
 <dd>
-<p>output variants in the form of IUPAC ambiguity codes</p>
+<p>output variants in the form of IUPAC ambiguity codes determined from FORMAT/GT fields. By default all
+samples are used and can be subset with <strong>-s, --samples</strong> and <strong>-S, --samples-file</strong>. Use <strong>-s -</strong> to ignore
+samples and use only the REF and ALT columns.  NOTE: prior to version 1.17 the IUPAC codes were determined solely
+from REF,ALT columns and sample genotypes were not considered.</p>
 </dd>
 <dt class="hdlist1"><strong>--mark-del</strong> <em>CHAR</em></dt>
 <dd>
-<p>instead of removing sequence, insert CHAR for deletions</p>
+<p>instead of removing sequence, insert character CHAR for deletions</p>
 </dd>
-<dt class="hdlist1"><strong>--mark-ins</strong> <em>uc</em>|<em>lc</em></dt>
+<dt class="hdlist1"><strong>--mark-ins</strong> <em>uc</em>|<em>lc</em>|<em>CHAR</em></dt>
 <dd>
-<p>highlight inserted sequence in uppercase (uc) or lowercase (lc), leaving the rest of the sequence as is</p>
+<p>highlight inserted sequence in uppercase (uc), lowercase (lc), or a provided character CHAR, leaving the rest of the sequence as is</p>
 </dd>
 <dt class="hdlist1"><strong>--mark-snv</strong> <em>uc</em>|<em>lc</em></dt>
 <dd>
-<p>highlight substitutions in uppercase (uc) or lowercase (lc), leaving the rest of the sequence as is</p>
+<p>highlight substitutions in uppercase (uc), lowercase (lc), or a provided character CHAR, leaving the rest of the sequence as is</p>
 </dd>
 <dt class="hdlist1"><strong>-m, --mask</strong> <em>FILE</em></dt>
 <dd>
@@ -1279,9 +1306,13 @@ format details.</p>
 <dd>
 <p>write output to a file</p>
 </dd>
-<dt class="hdlist1"><strong>-s, --sample</strong> <em>NAME</em></dt>
+<dt class="hdlist1"><strong>-s, --samples</strong> <em>LIST</em></dt>
 <dd>
-<p>apply variants of the given sample</p>
+<p>apply variants of the listed samples. See also the option <strong>-I, --iupac-codes</strong></p>
+</dd>
+<dt class="hdlist1"><strong>-S, --samples-file</strong> <em>FILE</em></dt>
+<dd>
+<p>apply variants of the samples listed in the file. See also the option <strong>-I, --iupac-codes</strong></p>
 </dd>
 </dl>
 </div>
@@ -1294,9 +1325,32 @@ format details.</p>
     bcftools consensus -i -s NA001 -f in.fa in.vcf.gz &gt; out.fa
 
     # Create consensus for one region. The fasta header lines are then expected
-    # in the form "&gt;chr:from-to".
-    samtools faidx ref.fa 8:11870-11890 | bcftools consensus in.vcf.gz -o out.fa</pre>
+    # in the form "&gt;chr:from-to". Ignore samples and consider only the REF and ALT columns
+    samtools faidx ref.fa 8:11870-11890 | bcftools consensus -s - in.vcf.gz -o out.fa
+
+    # For more examples see http://samtools.github.io/bcftools/howtos/consensus-sequence.html</pre>
 </div>
+</div>
+<div class="dlist">
+<dl>
+<dt class="hdlist1"><strong>Notes:</strong></dt>
+<dd>
+<p>Masking options are applied in the following order</p>
+<div class="olist arabic">
+<ol class="arabic">
+<li>
+<p>mask regions with <strong>--mask-with</strong> character if <strong>--mask</strong> is given. All overlapping VCF variants are ignored</p>
+</li>
+<li>
+<p>replace sequence not mentioned in the VCF with the requested character if <strong>--absent</strong> is given</p>
+</li>
+<li>
+<p>finally apply <strong>--mark-del</strong>, <strong>--mark-ins</strong>, <strong>--mark-snv</strong> masks</p>
+</li>
+</ol>
+</div>
+</dd>
+</dl>
 </div>
 </div>
 <div class="sect2">
@@ -1346,6 +1400,10 @@ format details.</p>
 <dt class="hdlist1"><strong>--targets-overlap</strong> <em>0</em>|<em>1</em>|<em>2</em></dt>
 <dd>
 <p>see <strong><a href="#common_options">Common Options</a></strong></p>
+</dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
 </dd>
 </dl>
 </div>
@@ -1628,13 +1686,13 @@ be used with <strong>--haplegendsample</strong> but not with <strong>--haplegend
 <dt class="hdlist1"><strong>-c, --columns</strong> <em>list</em></dt>
 <dd>
 <p>comma-separated list of fields in the input file. In the current
-version, the fields CHROM, POS, ID, and AA are expected and
-can appear in arbitrary order, columns which should be ignored in the input
+version, the fields CHROM, POS, ID, and AA or REF, ALT are expected and
+can appear in arbitrary order. Columns which should be ignored in the input
 file can be indicated by "-".
 The AA field lists alleles on the forward reference strand,
 for example "CC" or "CT" for diploid genotypes or "C"
 for haploid genotypes (sex chromosomes). Insertions and deletions
-are not supported yet, missing data can be indicated with "--".</p>
+are supported only with REF and ALT but not with AA. Missing data can be indicated with "--" or ".".</p>
 </dd>
 <dt class="hdlist1"><strong>-f, --fasta-ref</strong> <em>file</em></dt>
 <dd>
@@ -1656,7 +1714,10 @@ are not supported yet, missing data can be indicated with "--".</p>
 <div class="listingblock">
 <div class="content">
 <pre># Convert 23andme results into VCF
-bcftools convert -c ID,CHROM,POS,AA -s SampleName -f 23andme-ref.fa --tsv2vcf 23andme.txt -Oz -o out.vcf.gz</pre>
+bcftools convert -c ID,CHROM,POS,AA -s SampleName -f 23andme-ref.fa --tsv2vcf 23andme.txt -o out.vcf.gz
+
+# Convert tab-delimited file into a sites-only VCF (no genotypes), in this example first column to be ignored
+bcftools convert -c -,CHROM,POS,REF,ALT -f ref.fa --tsv2vcf calls.txt -o out.bcf</pre>
 </div>
 </div>
 </div>
@@ -1712,6 +1773,11 @@ For example, instead of writing the whole modified protein sequence with potenti
 aminoacids, with <strong>-B 1</strong> only an abbreviated version such as <em>25E..329&gt;25G..94</em> will be
 written.</p>
 </dd>
+<dt class="hdlist1"><strong>--dump-gff</strong> <em>FILE</em></dt>
+<dd>
+<p>dump the parsed GFF into a gzipped FILE. Intended for debugging purposes,
+shows how is the input GFF viewed by the program.</p>
+</dd>
 <dt class="hdlist1"><strong>-e, --exclude</strong> <em>EXPRESSION</em></dt>
 <dd>
 <p>exclude sites for which <em>EXPRESSION</em> is true. For valid expressions see
@@ -1729,6 +1795,7 @@ transcripts in malformatted GFFs with incorrect phase</p>
 <dt class="hdlist1"><strong>-g, --gff-annot</strong> <em>FILE</em></dt>
 <dd>
 <p>GFF3 annotation file (required), such as <a href="ftp://ftp.ensembl.org/pub/current_gff3/homo_sapiens" class="bare">ftp://ftp.ensembl.org/pub/current_gff3/homo_sapiens</a>.
+The script <strong><a href="#gff2gff">gff2gff</a></strong> can help with conversion from non-standard GFF formats.
 An example of a minimal working GFF file:</p>
 </dd>
 </dl>
@@ -1739,6 +1806,17 @@ An example of a minimal working GFF file:</p>
     # looks up their parent transcript (determined from the "Parent=transcript:" attribute),
     # the gene (determined from the transcript's "Parent=gene:" attribute), and the biotype
     # (the most interesting is "protein_coding").
+    #
+    # Empty and commented lines are skipped, the following GFF columns are required
+    #   1.  chromosome
+    #   2.  IGNORED
+    #   3.  type (CDS, exon, three_prime_UTR, five_prime_UTR, gene, transcript, etc.)
+    #   4.  start of the feature (1-based)
+    #   5.  end of the feature (1-based)
+    #   6.  IGNORED
+    #   7.  strand (+ or -)
+    #   8.  phase (0, 1, 2 or .)
+    #   9.  semicolon-separated attributes (see below)
     #
     # Attributes required for
     #   gene lines:
@@ -1861,6 +1939,16 @@ plain text output can be printed (<em>t</em>).</p>
 <dt class="hdlist1"><strong>--targets-overlap</strong> <em>0</em>|<em>1</em>|<em>2</em></dt>
 <dd>
 <p>see <strong><a href="#common_options">Common Options</a></strong></p>
+</dd>
+<dt class="hdlist1"><strong>--unify-chr-names</strong> <em>0</em>|<em>1</em></dt>
+<dd>
+<p>Automatically detect and unify chromosome naming conventions in the GFF, fasta
+and VCF, such as "chrX" vs "X". The chromosome names in the output VCF will match
+that of the input VCF. The default is to attempt the automatic translation.</p>
+</dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
 </dd>
 </dl>
 </div>
@@ -2075,6 +2163,10 @@ by the program ("Filter%d").</p>
 <dd>
 <p>see <strong><a href="#common_options">Common Options</a></strong></p>
 </dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
+</dd>
 </dl>
 </div>
 </div>
@@ -2085,6 +2177,11 @@ by the program ("Filter%d").</p>
 option is given, the identity of samples from <em>query.vcf.gz</em>
 is checked against the samples in the <strong>-g</strong> file.
 Without the <strong>-g</strong> option, multi-sample cross-check of samples in <em>query.vcf.gz</em> is performed.</p>
+</div>
+<div class="paragraph">
+<p>Note that the interpretation of the discordance score depends on the options provided (specifically <strong>-e</strong> and
+<strong>-u</strong>) and on the available annotations (FORMAT/PL vs FORMAT/GT).
+The discordance score can be interpreted as the number of mismatching genotypes if only GT-vs-GT matching is performed.</p>
 </div>
 <div class="dlist">
 <dl>
@@ -2104,11 +2201,14 @@ in-memory sorting and DIR is the temporary directory for external sorting. This 
 <p>Interpret genotypes and genotype likelihoods probabilistically. The value of <em>INT</em>
 represents genotype quality when GT tag is used (e.g. Q=30 represents one error in 1,000 genotypes and
 Q=40 one error in 10,000 genotypes) and is ignored when PL tag is used (in that case an arbitrary
-non-zero integer can be provided). See also the <strong>-u, --use</strong> option below. If set to 0,
-the discordance equals to the number of mismatching genotypes when GT vs GT is compared.
-Note that the values with and without <strong>-e</strong> are not comparable, only values generated
-with <strong>-e 0</strong> correspond to mismatching genotypes.
-If performance is an issue, set to 0 for faster run but less accurate results.</p>
+non-zero integer can be provided).
+&#160;<br>
+&#160;<br>
+If <strong>-e</strong> is set to 0, the discordance score can be interpreted as the number of mismatching genotypes,
+but only in the GT-vs-GT matching mode. See the <strong>-u, --use</strong> option below for additional notes and caveats.
+&#160;<br>
+&#160;<br>
+If performance is an issue, set <strong>-e 0</strong> for faster run times but less accurate results.</p>
 </dd>
 <dt class="hdlist1"><strong>-g, --genotypes</strong> <em>FILE</em></dt>
 <dd>
@@ -2182,8 +2282,13 @@ from the query file, the second from the genotypes file when <strong>-g</strong>
 <dt class="hdlist1"><strong>-u, --use</strong> <em>TAG1</em>[,<em>TAG2</em>]</dt>
 <dd>
 <p>specifies which tag to use in the query file (<em>TAG1</em>) and the <strong>-g</strong> (<em>TAG2</em>) file.
-By default, the PL tag is used in the query file and GT in the <strong>-g</strong> file when
-available.</p>
+By default, the PL tag is used in the query file and, when available, the GT tags in the
+<strong>-g</strong> file.
+&#160;<br>
+&#160;<br>
+Note that when the requested tag is not available, the program will attempt to use
+the other tag. The output includes the number of sites that were matched by the four
+possible mode (for example GT-vs-GT or GT-vs-PL).</p>
 </dd>
 </dl>
 </div>
@@ -2281,6 +2386,12 @@ using the input file name plus a <em>.csi</em> or <em>.tbi</em> extension</p>
 <h4 id="_stats_options">Stats options:</h4>
 <div class="dlist">
 <dl>
+<dt class="hdlist1"><strong>-a, --all</strong></dt>
+<dd>
+<p>Used in conjunction with <strong>-s, --stats</strong>, print per contig stats
+for all contigs, even those with zero records and those for which
+no stats are recorded in the index file (shown as <em>.</em>).</p>
+</dd>
 <dt class="hdlist1"><strong>-n, --nrecords</strong></dt>
 <dd>
 <p>print the number of records based on the CSI or TBI index files</p>
@@ -2290,7 +2401,7 @@ using the input file name plus a <em>.csi</em> or <em>.tbi</em> extension</p>
 <p>Print per contig stats based on the CSI or TBI index files.
 Output format is three tab-delimited columns listing the contig
 name, contig length (<em>.</em> if unknown) and number of records for
-the contig. Contigs with zero records are not printed.</p>
+the contig. Contigs with zero records are not printed by default.</p>
 </dd>
 </dl>
 </div>
@@ -2378,6 +2489,10 @@ output, their names are controlled via <strong>-p</strong> instead.</p>
 <dd>
 <p>list of input files to output given as 1-based indices. With <strong>-p</strong> and no
 <strong>-w</strong>, all files are written.</p>
+</dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file. This is done automatically with the <strong>-p</strong> option.</p>
 </dd>
 </dl>
 </div>
@@ -2482,7 +2597,8 @@ or apply all filters (<em>+</em>), which is the default.</p>
 file <em>FILE</em> is not given and the dash (<em>-</em>) is given, unknown reference
 bases generated at gVCF block splits will be substituted with N&#8217;s.
 The <strong>--gvcf</strong> option uses the following default INFO rules:
-<strong>-i QS:sum,MinDP:min,I16:sum,IDV:max,IMF:max</strong>.</p>
+<strong>-i QS:sum,MinDP:min,I16:sum,IDV:max,IMF:max</strong> and the following missing
+rules: <strong>-M PL:max,AD:0</strong>.</p>
 </dd>
 <dt class="hdlist1"><strong>-i, --info-rules</strong> <em>-</em>|<em>TAG:METHOD</em>[,&#8230;&#8203;]</dt>
 <dd>
@@ -2509,7 +2625,7 @@ alternate alleles relevant (local) for the current sample. The number <em>INT</e
 maximum number of alternate alleles that can be included in the PL tag. The default value
 is 0 which disables the feature and outputs values for all alternate alleles.</p>
 </dd>
-<dt class="hdlist1"><strong>-m, --merge</strong> <em>snps</em>|<em>indels</em>|<em>both</em>|<em>all</em>|<em>none</em>|<em>id</em></dt>
+<dt class="hdlist1"><strong>-m, --merge</strong> <em>snps</em>|<em>indels</em>|<em>both</em>|<em>snp-ins-del</em>|<em>all</em>|<em>none</em>|<em>id</em></dt>
 <dd>
 <p>The option controls what types of multiallelic records can be created:</p>
 </dd>
@@ -2517,16 +2633,27 @@ is 0 which disables the feature and outputs values for all alternate alleles.</p
 </div>
 <div class="listingblock">
 <div class="content">
-<pre>-m none   ..  no new multiallelics, output multiple records instead
--m snps   ..  allow multiallelic SNP records
--m indels ..  allow multiallelic indel records
--m both   ..  both SNP and indel records can be multiallelic
--m all    ..  SNP records can be merged with indel records
--m id     ..  merge by ID</pre>
+<pre>-m none        ..  no new multiallelics, output multiple records instead
+-m snps        ..  allow multiallelic SNP records
+-m indels      ..  allow multiallelic indel records
+-m both        ..  both SNP and indel records can be multiallelic
+-m all         ..  SNP records can be merged with indel records
+-m snp-ins-del ..  allow multiallelic SNVs, insertions, deletions, but don't mix them
+-m id          ..  merge by ID</pre>
 </div>
 </div>
 <div class="dlist">
 <dl>
+<dt class="hdlist1"><strong>-M, --missing-rules</strong> <em>-</em>|<em>TAG:METHOD</em>[,&#8230;&#8203;]</dt>
+<dd>
+<p>Rules for merging vector tags at multiallelic sites. When input files have different alternate
+alleles, vector fields pertaining to unobserved alleles are set to missing (<em>.</em>) by default.
+The <em>METHOD</em> is one of <em>.</em> (the default, use missing values), <em>NUMBER</em> (use a constant value, e.g. 0),
+<em>max</em> (the maximum value observed for other alleles in the sample). When <strong>--gvcf</strong> option is set,
+the rule <strong>-M PL:max,AD:0</strong> is implied. This can be overriden with providing <strong>-M -</strong> or <strong>-M PL:.,AD:.</strong>.
+Note that if the unobserved allele is explicitly present as <em>&lt;*&gt;</em> or <em>&lt;NON_REF&gt;</em>, then its corresponding
+value will be used regardless of <strong>-M</strong> settings.</p>
+</dd>
 <dt class="hdlist1"><strong>--no-index</strong></dt>
 <dd>
 <p>the option allows to merge files without indexing them first. In order for this
@@ -2560,6 +2687,10 @@ the same order and consistent with the order of sequences in the VCF header.</p>
 <dt class="hdlist1"><strong>--threads</strong> <em>INT</em></dt>
 <dd>
 <p>see <strong><a href="#common_options">Common Options</a></strong></p>
+</dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
 </dd>
 </dl>
 </div>
@@ -2694,6 +2825,13 @@ is the opposite of <strong>samtools mpileup -G</strong>.</p>
 </div>
 <div class="dlist">
 <dl>
+<dt class="hdlist1"><strong>--indels-2.0</strong></dt>
+<dd>
+<p>A new EXPERIMENTAL indel calling model which aims to address some known deficiencies of
+the current indel calling algorithm. Specifically, it uses diploid reference consensus
+sequence. Note that in the current version it has the potential to increase sensitivity
+but at the cost of decreased specificity</p>
+</dd>
 <dt class="hdlist1"><strong>-q, -min-MQ</strong> <em>INT</em></dt>
 <dd>
 <p>Minimum mapping quality for an alignment to be used [0]</p>
@@ -2865,6 +3003,10 @@ used by the earlier Bcftools releases.  For excample BQBZ becomes
 BQB.</pre>
 </div>
 </div>
+</dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
 </dd>
 </dl>
 </div>
@@ -3053,7 +3195,7 @@ but will not attempt to fix PL or other fields. Also note, and this
 cannot be stressed enough, that <em>s</em> will NOT fix strand issues in
 your VCF, do NOT use it for that purpose!!! (Instead see
 <a href="http://samtools.github.io/bcftools/howtos/plugin.af-dist.html" class="bare">http://samtools.github.io/bcftools/howtos/plugin.af-dist.html</a> and
-&lt;<a href="http://samtools.github.io/bcftools/howtos/plugin.fixref.html&gt;" class="bare">http://samtools.github.io/bcftools/howtos/plugin.fixref.html&gt;</a>.)</p>
+&lt;<a href="http://samtools.github.io/bcftools/howtos/plugin.fixref.html&gt;." class="bare">http://samtools.github.io/bcftools/howtos/plugin.fixref.html&gt;.</a>)</p>
 </dd>
 <dt class="hdlist1"><strong>-d, --rm-dup</strong> <em>snps</em>|<em>indels</em>|<em>both</em>|<em>all</em>|<em>exact</em></dt>
 <dd>
@@ -3090,6 +3232,11 @@ together: If only SNP records should be split or merged, specify <em>snps</em>; 
 both SNPs and indels should be merged separately into two records, specify
 <em>both</em>; if SNPs and indels should be merged into a single record, specify
 <em>any</em>.</p>
+</dd>
+<dt class="hdlist1"><strong>--multi-overlaps</strong> <em>0</em>|<em>.</em></dt>
+<dd>
+<p>use the reference (<em>0</em>) or missing (<em>.</em>) allele for overlapping alleles after
+splitting multiallelic sites</p>
 </dd>
 <dt class="hdlist1"><strong>--no-version</strong></dt>
 <dd>
@@ -3150,6 +3297,10 @@ annotation is CHROM|POS|REF|ALT|USED_ALT_IDX.</p>
 <dd>
 <p>maximum distance between two records to consider when locally
 sorting variants which changed position during the realignment</p>
+</dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
 </dd>
 </dl>
 </div>
@@ -3225,6 +3376,10 @@ the usage examples that each plugin comes with.</p>
 <dt class="hdlist1"><strong>--threads</strong> <em>INT</em></dt>
 <dd>
 <p>see <strong><a href="#common_options">Common Options</a></strong></p>
+</dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
 </dd>
 </dl>
 </div>
@@ -3385,7 +3540,7 @@ that order.</p>
 </ul>
 </div>
 </dd>
-<dt class="hdlist1"><strong>fix-ploidy</strong></dt>
+<dt class="hdlist1"><strong>fixploidy</strong></dt>
 <dd>
 <p>sets correct ploidy</p>
 </dd>
@@ -3428,6 +3583,10 @@ to <strong>smpl-stats</strong> and <strong>trio-stats</strong></p>
 <p>compare two files and set non-identical genotypes to missing</p>
 </dd>
 <dt class="hdlist1"><strong>mendelian</strong></dt>
+<dd>
+<p>count Mendelian consistent / inconsistent genotypes (deprecated, use +mendelian2 instead)</p>
+</dd>
+<dt class="hdlist1"><strong>mendelian2</strong></dt>
 <dd>
 <p>count Mendelian consistent / inconsistent genotypes.</p>
 </dd>
@@ -3487,6 +3646,10 @@ can be added as a new INFO field to the VCF or in a custom text format. See
 <dt class="hdlist1"><strong>trio-switch-rate</strong></dt>
 <dd>
 <p>calculate phase switch rate in trio samples, children samples must have phased GTs</p>
+</dd>
+<dt class="hdlist1"><strong>variant-distance</strong></dt>
+<dd>
+<p>annotate sites with the distance to the nearest variant</p>
 </dd>
 <dt class="hdlist1"><strong>variantkey-hex</strong></dt>
 <dd>
@@ -3998,6 +4161,30 @@ it will be in the range (10,1000).</p>
 both types are printed and the output is uncompressed. Add <em>z</em> for
 a compressed output.</p>
 </dd>
+</dl>
+</div>
+<div class="listingblock">
+<div class="content">
+<pre>    # Output fields:
+    RG = predicted homo/autozygous regions
+        - Sample
+        - Chromosome
+        - Start
+        - End
+        - Length (bp)
+        - Number of markers
+        - Quality .. average phred score in the region from the forward-backward algorithm
+
+    ST = per-site output showing:
+        - Sample
+        - Chromosome
+        - Position
+        - State .. predicted state from the Viterbi algorithm, 0 for normal (HW, Hardy-Weinberg) or 1 for autozygous (AZ)
+        - Quality .. quality score from the forward-backward algorithm</pre>
+</div>
+</div>
+<div class="dlist">
+<dl>
 <dt class="hdlist1"><strong>-r, --regions</strong> <em>chr</em>|<em>chr:pos</em>|<em>chr:from-to</em>|<em>chr:from-</em>[,&#8230;&#8203;]</dt>
 <dd>
 <p>see <strong><a href="#common_options">Common Options</a></strong></p>
@@ -4075,6 +4262,10 @@ your system limit on the number of open files ("ulimit") may need to be increase
 <dt class="hdlist1"><strong>-T, --temp-dir</strong> <em>DIR</em></dt>
 <dd>
 <p>Use this directory to store temporary files</p>
+</dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
 </dd>
 </dl>
 </div>
@@ -4279,6 +4470,10 @@ best compression.</p>
 <dd>
 <p>see <strong><a href="#common_options">Common Options</a></strong></p>
 </dd>
+<dt class="hdlist1"><strong>--write-index</strong></dt>
+<dd>
+<p>Automatically index the output file</p>
+</dd>
 </dl>
 </div>
 </div>
@@ -4320,9 +4515,9 @@ multiple subsets simultaneously using the <strong>split</strong> plugin.</p>
 <p>Note that filter options below dealing with counting the number of alleles
 will, for speed, first check for the values of AC and AN in the INFO column to
 avoid parsing all the genotype (FORMAT/GT) fields in the VCF. This means
-that a filter like <em>--min-af 0.1</em> will be calculated from INFO/AC and INFO/AN
-when available or FORMAT/GT otherwise. However, it will not attempt to use any other existing
-field, like INFO/AF for example. For that, use <em>--exclude AF&lt;0.1</em> instead.</p>
+that filters like <em>--uncalled</em>, --exclude-uncalled', or <em>--min-af 0.1</em> will be calculated from INFO/AC and
+INFO/AN when available or FORMAT/GT otherwise. However, it will not attempt to use any other existing field,
+like INFO/AF for example. For that, use <em>--exclude AF&lt;0.1</em> instead.</p>
 </div>
 <div class="paragraph">
 <p>Also note that one must be careful when sample subsetting and filtering is performed in a single command
@@ -4416,11 +4611,15 @@ most frequent (<em>nonmajor</em>) alleles.</p>
 </dd>
 <dt class="hdlist1"><strong>-u, --uncalled</strong></dt>
 <dd>
-<p>print sites without a called genotype</p>
+<p>print sites without a called genotype, i.e. print sites with all genotypes
+missing. Note that the missingness is determined from INFO/AN and AC tags
+when available to avoid parsing sample fields.</p>
 </dd>
 <dt class="hdlist1"><strong>-U, --exclude-uncalled</strong></dt>
 <dd>
-<p>exclude sites without a called genotype</p>
+<p>exclude sites without a called genotype, i.e. print sites with at least one
+non-missing genotype. Note that the missingness is determined from INFO/AN
+and AC tags when available to avoid parsing sample fields.</p>
 </dd>
 <dt class="hdlist1"><strong>-v, --types</strong> <em>snps</em>|<em>indels</em>|<em>mnps</em>|<em>other</em></dt>
 <dd>
@@ -4474,7 +4673,7 @@ important libraries used by bcftools.</p>
 </div>
 </div>
 <div class="sect1">
-<h2 id="expressions">EXPRESSIONS</h2>
+<h2 id="expressions">FILTERING EXPRESSIONS</h2>
 <div class="sectionbody">
 <div class="paragraph">
 <p>These filtering expressions are accepted by most of the commands.</p>
@@ -4494,10 +4693,10 @@ supported only to filter by the ID column)</p>
 </div>
 </li>
 <li>
-<p>arithmetic operators</p>
+<p>arithmetic operators (addition, multiplication, subtraction, division, modulo)</p>
 <div class="literalblock">
 <div class="content">
-<pre>+,*,-,/</pre>
+<pre>+, *, -, /, %</pre>
 </div>
 </div>
 </li>
@@ -4546,14 +4745,18 @@ FILTER, QUAL, ID, CHROM, POS, REF, ALT[0]</pre>
 </div>
 </li>
 <li>
-<p>starting with 1.11, the FILTER column can be queried as follows:</p>
+<p>the FILTER column can be queried as follows:</p>
 <div class="literalblock">
 <div class="content">
 <pre>FILTER="PASS"
+FILTER="."
 FILTER="A"          .. exact match, for example "A;B" does not pass
+FILTER="A;B"        .. exact match, "A;B" and "B;A" pass, everything else fails
 FILTER!="A"         .. exact match, for example "A;B" does pass
-FILTER~"A"          .. both "A" and "A;B" pass
-FILTER!~"A"         .. neither "A" nor "A;B" pass</pre>
+FILTER~"A"          .. subset match, for example both "A" and "A;B" pass
+FILTER~"A;B"        .. subset match, pass only if both "A" and "B" are present
+FILTER!~"A"         .. complement match, for example both "A" and "A;B" fail
+FILTER!~"A;B"       .. complement match, fail if both "A" and "B" are present</pre>
 </div>
 </div>
 </li>
@@ -4629,7 +4832,7 @@ TYPE!~"snp"</pre>
 <li>
 <p>array subscripts (0-based), "*" for any element, "-" to indicate a range. Note that
 for querying FORMAT vectors, the colon ":" can be used to select a sample and an
-element of the vector, as shown in the examples below</p>
+element of the vector, as shown in the examples below.</p>
 <div class="literalblock">
 <div class="content">
 <pre>INFO/AF[0] &gt; 0.3             .. first AF value bigger than 0.3
@@ -4646,6 +4849,18 @@ FORMAT/AD[0:*], AD[0:] or AD[0] .. first sample, any AD field
 FORMAT/AD[*:1] or AD[:1]        .. any sample, second AD field
 (DP4[0]+DP4[1])/(DP4[2]+DP4[3]) &gt; 0.3
 CSQ[*] ~ "missense_variant.*deleterious"</pre>
+</div>
+</div>
+</li>
+<li>
+<p>in addition to array subscripts shown above, it is possible to subscript arrays
+of Number=R tags by alleles found in FORMAT/GT (starting with version 1.17).
+For example</p>
+<div class="literalblock">
+<div class="content">
+<pre>FORMAT/AD[GT] &gt; 10        .. require support of more than 10 reads for each allele
+FORMAT/AD[0:GT] &gt; 10      .. same as above, but in the first sample
+sSUM(FORMAT/AD[GT]) &gt; 20  .. require total sample depth bigger than 20</pre>
 </div>
 </div>
 </li>
@@ -4766,6 +4981,26 @@ used on the result. For example, when querying "TAG=1,2,3,4", it will be evaluat
 </div>
 </div>
 </li>
+<li>
+<p>When arithmetic operators are used on vectors A and B, the following logic is used to
+compute the resulting vector C:</p>
+<div class="ulist">
+<ul>
+<li>
+<p>C_i = A_i + B_i when length(A)==B(A) and sets length&#169;=length(A)</p>
+</li>
+<li>
+<p>C_i = A_i + B_0 when length(B)=1 and sets length&#169;=length(A)</p>
+</li>
+<li>
+<p>C_i = A_0 + B_i when length(A)=1 and sets length&#169;=length(B)</p>
+</li>
+<li>
+<p>throw an error when length(A)!=length(B) AND length(A)!=1 AND length(B)!=1</p>
+</li>
+</ul>
+</div>
+</li>
 </ul>
 </div>
 <div class="paragraph">
@@ -4874,8 +5109,23 @@ that the whole expression is passed to the program as intended:</p>
 </div>
 </div>
 <div class="sect1">
-<h2 id="_scripts_and_options">SCRIPTS AND OPTIONS</h2>
+<h2 id="_scripts">SCRIPTS</h2>
 <div class="sectionbody">
+<div class="sect2">
+<h3 id="gff2gff">gff2gff</h3>
+<div class="paragraph">
+<p>Attempts to fix a GFF file to be correctly parsed by <strong><a href="#csq">csq</a></strong>.</p>
+</div>
+<div class="openblock">
+<div class="content">
+<div class="literalblock">
+<div class="content">
+<pre>zcat in.gff.gz | gff2gff | gzip -c &gt; out.gff.gz</pre>
+</div>
+</div>
+</div>
+</div>
+</div>
 <div class="sect2">
 <h3 id="plot-vcfstats">plot-vcfstats [<em>OPTIONS</em>] <em>file.vchk</em> [&#8230;&#8203;]</h3>
 <div class="paragraph">
@@ -4977,8 +5227,9 @@ large overhead of the VCF &#8594; BCF &#8594; VCF conversion.</p>
 <div class="paragraph">
 <p>Heng Li from the Sanger Institute wrote the original C version of htslib,
 samtools and bcftools. Bob Handsaker from the Broad Institute implemented the
-BGZF library. Petr Danecek, Shane McCarthy and John Marshall are  maintaining
-and further developing bcftools.  Many other people contributed to the program
+BGZF library. Petr Danecek is maintaining and further developing bcftools, together
+with the rest of the <a href="https://www.sanger.ac.uk/tool/samtools-bcftools-htslib">samtools team</a>.
+Many other people contributed to the program
 and to the file format specifications, both directly and indirectly by
 providing patches, testing and reporting bugs. We thank them all.</p>
 </div>
@@ -5019,7 +5270,7 @@ Copyright (c) Genome Research Ltd.</p>
 </div>
 <div id="footer">
 <div id="footer-text">
-Last updated 2022-04-07 16:32:56 +0100
+Last updated 2023-06-02 11:27:10 +0100
 </div>
 </div>
 </body>

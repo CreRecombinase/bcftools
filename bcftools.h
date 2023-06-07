@@ -1,6 +1,6 @@
 /*  bcftools.h -- utility function declarations.
 
-    Copyright (C) 2013-2022 Genome Research Ltd.
+    Copyright (C) 2013-2023 Genome Research Ltd.
 
     Author: Petr Danecek <pd3@sanger.ac.uk>
 
@@ -49,6 +49,9 @@ void error(const char *format, ...) HTS_NORETURN HTS_FORMAT(HTS_PRINTF_FMT, 1, 2
 //  newline will be added by the function.
 void error_errno(const char *format, ...) HTS_NORETURN HTS_FORMAT(HTS_PRINTF_FMT, 1, 2);
 
+// For on the fly index creation with --write-index
+int init_index(htsFile *fh, bcf_hdr_t *hdr, char *fname, char **idx_fname);
+
 void bcf_hdr_append_version(bcf_hdr_t *hdr, int argc, char **argv, const char *cmd);
 const char *hts_bcf_wmode(int file_type);
 const char *hts_bcf_wmode2(int file_type, const char *fname);
@@ -56,8 +59,6 @@ void set_wmode(char dst[8], int file_type, const char *fname, int compression_le
 char *init_tmp_prefix(const char *prefix);
 int read_AF(bcf_sr_regions_t *tgt, bcf1_t *line, double *alt_freq);
 int parse_overlap_option(const char *arg);
-
-void *smalloc(size_t size);     // safe malloc
 
 static inline int iupac2bitmask(char iupac)
 {
@@ -99,7 +100,7 @@ static inline int iupac_consistent(char iupac, char nt)
         13,0,0,4,11,0,0,12,0,3,15,0,0,0,5,6,8,0,7,9,0,10
     };
     if ( iupac > 89 ) return 0;
-    if ( nt > 90 ) nt -=  32;  // lowercase 
+    if ( nt > 90 ) nt -=  32;  // lowercase
     if ( nt=='A' ) nt = 1;
     else if ( nt=='C' ) nt = 2;
     else if ( nt=='G' ) nt = 4;
